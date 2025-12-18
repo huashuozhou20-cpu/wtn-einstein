@@ -5,6 +5,7 @@ A minimal, testable implementation of the WTN Einstein board game with simple ag
 ## Project Layout
 - `src/einstein_wtn/` — game types, engine logic, agents, and CLI runner.
 - `tests/` — pytest suite covering movement candidates, boundary moves, capture handling, terminal detection, RNG determinism, and layout/search behavior.
+- `tests/` — pytest suite covering movement candidates, boundary moves, capture handling, terminal detection, and RNG determinism.
 - `.github/workflows/ci.yml` — CI for Python 3.11.
 
 ## Rules Summary
