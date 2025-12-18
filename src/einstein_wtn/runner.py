@@ -15,6 +15,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 from . import engine
 from .agents import ExpectiminimaxAgent, HeuristicAgent, RandomAgent, SearchStats
+from .opening import LayoutSearchAgent
 from .types import GameState, Player
 
 AgentFactory = Callable[[Optional[int]], RandomAgent]
@@ -35,6 +36,8 @@ def _build_agent(name: str, seed: Optional[int]):
         return HeuristicAgent(seed=seed)
     if name == "expecti":
         return ExpectiminimaxAgent(seed=seed)
+    if name == "layoutsearch":
+        return LayoutSearchAgent(seed=seed)
     raise ValueError(f"Unknown agent '{name}'")
 
 
@@ -232,8 +235,8 @@ def play_match(
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Einstein WTN runner")
     parser.add_argument("--mode", choices=["game", "match"], required=True)
-    parser.add_argument("--red", choices=["random", "heuristic", "expecti"], default="heuristic")
-    parser.add_argument("--blue", choices=["random", "heuristic", "expecti"], default="random")
+    parser.add_argument("--red", choices=["random", "heuristic", "expecti", "layoutsearch"], default="heuristic")
+    parser.add_argument("--blue", choices=["random", "heuristic", "expecti", "layoutsearch"], default="random")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--time-limit-seconds", type=int, default=240)
     parser.add_argument("--verbose", action="store_true")

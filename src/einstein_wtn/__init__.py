@@ -15,6 +15,7 @@ from .engine import (
     winner,
 )
 from .agents import Agent, ExpectiminimaxAgent, HeuristicAgent, RandomAgent, SearchStats
+from .opening import LayoutSearchAgent, generate_all_layouts, score_layout
 
 __all__ = [
     "Agent",
@@ -22,10 +23,13 @@ __all__ = [
     "ExpectiminimaxAgent",
     "GameState",
     "HeuristicAgent",
+    "LayoutSearchAgent",
     "Move",
     "Player",
     "RandomAgent",
     "SearchStats",
+    "generate_all_layouts",
+    "score_layout",
     "START_BLUE_CELLS",
     "START_RED_CELLS",
     "TARGET_BLUE",

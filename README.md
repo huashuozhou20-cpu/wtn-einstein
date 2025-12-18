@@ -36,6 +36,17 @@ Use the expectiminimax agent and specify layouts explicitly (comma-separated per
 python -m einstein_wtn.runner --mode game --red expecti --blue heuristic --seed 3 --red-layout "1,2,3,4,5,6" --blue-layout "6,5,4,3,2,1"
 ```
 
+## Opening / Layout Search
+- The `layoutsearch` agent selects stronger openings by quickly sampling and evaluating layouts before the game starts.
+- Example: play with layoutsearch as Red versus heuristic Blue:
+  ```bash
+  python -m einstein_wtn.runner --mode game --red layoutsearch --blue heuristic --seed 5
+  ```
+  Or benchmark it:
+  ```bash
+  python -m einstein_wtn.tournament --games 200 --red layoutsearch --blue heuristic --seed 0 --stats
+  ```
+
 ## Benchmark / Tournament
 - Run 200 games expecti vs heuristic (quiet by default):
   ```bash
