@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "einstein-wtn"
+version = "0.1.0"
+description = "Einstein WTN board game engine and CLI"
+authors = [{ name = "WTN" }]
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+einstein-wtn = "einstein_wtn.runner:main"
