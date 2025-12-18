@@ -11,6 +11,7 @@ Rules (see AGENTS.md for authoritative list):
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable, List, Sequence, Tuple
 
 from .types import GameState, Move, Player
@@ -166,6 +167,7 @@ def _capture(state: GameState, coord: Tuple[int, int]) -> None:
         state.pos_blue[piece_id] = None
         state.alive_blue &= ~_bit_for(piece_id)
     state.board[r][c] = 0
+    state._key_cache = None
 
 
 def apply_move(state: GameState, move: Move) -> GameState:
@@ -190,7 +192,102 @@ def apply_move(state: GameState, move: Move) -> GameState:
     next_state.board[r_to][c_to] = sign
 
     next_state.turn = player.opponent()
+    next_state._key_cache = None
     return next_state
+
+
+@dataclass
+class UndoRecord:
+    """Information needed to undo an in-place move."""
+
+    prev_turn: Player
+    move: Move
+    from_value: int
+    to_value: int
+    moved_prev_pos: Tuple[int, int]
+    captured_player: Player | None
+    captured_piece_id: int | None
+    captured_prev_pos: Tuple[int, int] | None
+    alive_red: int
+    alive_blue: int
+    key_cache: Tuple | None
+
+
+def apply_move_inplace(state: GameState, move: Move) -> UndoRecord:
+    """Apply a move by mutating the state, returning data required for undo."""
+
+    player = state.turn
+    from_r, from_c = move.from_rc
+    to_r, to_c = move.to_rc
+    from_value = state.board[from_r][from_c]
+    to_value = state.board[to_r][to_c]
+    positions = _pos_for(state, player)
+    moved_prev_pos = positions[move.piece_id]
+
+    alive_red_prev = state.alive_red
+    alive_blue_prev = state.alive_blue
+    captured_player = None
+    captured_piece_id = None
+    captured_prev_pos = None
+    if to_value != 0:
+        captured_player = Player.RED if to_value > 0 else Player.BLUE
+        captured_piece_id = abs(to_value)
+        if captured_player is Player.RED:
+            captured_prev_pos = state.pos_red[captured_piece_id]
+            state.pos_red[captured_piece_id] = None
+            state.alive_red &= ~_bit_for(captured_piece_id)
+        else:
+            captured_prev_pos = state.pos_blue[captured_piece_id]
+            state.pos_blue[captured_piece_id] = None
+            state.alive_blue &= ~_bit_for(captured_piece_id)
+
+    positions[move.piece_id] = move.to_rc
+
+    state.board[from_r][from_c] = 0
+    state.board[to_r][to_c] = from_value
+    state.turn = player.opponent()
+    prev_key = state._key_cache
+    state._key_cache = None
+
+    return UndoRecord(
+        prev_turn=player,
+        move=move,
+        from_value=from_value,
+        to_value=to_value,
+        moved_prev_pos=moved_prev_pos,
+        captured_player=captured_player,
+        captured_piece_id=captured_piece_id,
+        captured_prev_pos=captured_prev_pos,
+        alive_red=alive_red_prev,
+        alive_blue=alive_blue_prev,
+        key_cache=prev_key,
+    )
+
+
+def undo_move_inplace(state: GameState, undo: UndoRecord) -> None:
+    """Revert a prior call to :func:`apply_move_inplace`."""
+
+    move = undo.move
+    from_r, from_c = move.from_rc
+    to_r, to_c = move.to_rc
+
+    state.turn = undo.prev_turn
+    state.alive_red = undo.alive_red
+    state.alive_blue = undo.alive_blue
+
+    # Restore positions.
+    mover_positions = _pos_for(state, undo.prev_turn)
+    mover_positions[move.piece_id] = undo.moved_prev_pos
+
+    if undo.captured_player is not None and undo.captured_piece_id is not None:
+        captured_positions = state.pos_red if undo.captured_player is Player.RED else state.pos_blue
+        captured_positions[undo.captured_piece_id] = undo.captured_prev_pos
+
+    # Restore board cells.
+    state.board[from_r][from_c] = undo.from_value
+    state.board[to_r][to_c] = undo.to_value
+
+    state._key_cache = undo.key_cache
 
 
 def winner(state: GameState) -> Player | None:

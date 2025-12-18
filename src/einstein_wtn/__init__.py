@@ -14,7 +14,7 @@ from .engine import (
     new_game,
     winner,
 )
-from .agents import Agent, ExpectiminimaxAgent, HeuristicAgent, RandomAgent
+from .agents import Agent, ExpectiminimaxAgent, HeuristicAgent, RandomAgent, SearchStats
 
 __all__ = [
     "Agent",
@@ -25,6 +25,7 @@ __all__ = [
     "Move",
     "Player",
     "RandomAgent",
+    "SearchStats",
     "START_BLUE_CELLS",
     "START_RED_CELLS",
     "TARGET_BLUE",

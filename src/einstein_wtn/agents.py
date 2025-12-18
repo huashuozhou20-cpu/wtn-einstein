@@ -4,10 +4,22 @@ from __future__ import annotations
 
 import random
 import time
+from dataclasses import dataclass
 from typing import List, Optional
 
 from . import engine
 from .types import Move, Player
+
+
+@dataclass
+class SearchStats:
+    """Aggregated statistics from a single search."""
+
+    nodes: int
+    depth_reached: int
+    tt_hits: int
+    tt_stores: int
+    elapsed_ms: float
 
 
 class Agent:
@@ -105,6 +117,11 @@ class ExpectiminimaxAgent(Agent):
         self._heuristic = HeuristicAgent(seed=seed)
         self._rng = random.Random(seed)
         self._ttable = {}
+        self.last_stats: Optional[SearchStats] = None
+        self._nodes = 0
+        self._tt_hits = 0
+        self._tt_stores = 0
+        self._depth_reached = 0
 
     def choose_initial_layout(self, player: Player, time_budget_ms: Optional[int] = None) -> List[int]:
         """Mirror the heuristic agent placement to prioritize depth toward the goal."""
@@ -112,6 +129,13 @@ class ExpectiminimaxAgent(Agent):
         return self._heuristic.choose_initial_layout(player, time_budget_ms=time_budget_ms)
 
     def choose_move(self, state, dice: int, time_budget_ms: Optional[int] = None) -> Move:
+        self.last_stats = None
+        self._nodes = 0
+        self._tt_hits = 0
+        self._tt_stores = 0
+        self._depth_reached = 0
+        start_time = time.monotonic()
+
         moves = engine.generate_legal_moves(state, dice)
         if not moves:
             raise ValueError("No legal moves available")
@@ -123,7 +147,10 @@ class ExpectiminimaxAgent(Agent):
 
         for depth in range(1, self.max_depth + 1):
             try:
-                value, move = self._search_decision(state, dice, depth, maximizing_player=state.turn, deadline=deadline)
+                value, move = self._search_decision(
+                    state, dice, depth, maximizing_player=state.turn, deadline=deadline, ply=0
+                )
+                self._depth_reached = max(self._depth_reached, depth)
             except TimeoutError:
                 break
             if move is not None:
@@ -131,6 +158,15 @@ class ExpectiminimaxAgent(Agent):
             # If we already found a forced win, stop early.
             if value == float("inf"):
                 break
+
+        elapsed_ms = (time.monotonic() - start_time) * 1000.0
+        self.last_stats = SearchStats(
+            nodes=self._nodes,
+            depth_reached=self._depth_reached,
+            tt_hits=self._tt_hits,
+            tt_stores=self._tt_stores,
+            elapsed_ms=elapsed_ms,
+        )
         return best_move
 
     def _time_check(self, deadline: Optional[float]) -> None:
@@ -168,16 +204,21 @@ class ExpectiminimaxAgent(Agent):
         depth: int,
         maximizing_player: Player,
         deadline: Optional[float],
+        ply: int,
     ) -> tuple[float, Optional[Move]]:
         self._time_check(deadline)
+        self._nodes += 1
+        self._depth_reached = max(self._depth_reached, ply)
         key = (state.key(), dice, depth, "decision", maximizing_player)
         if key in self._ttable:
+            self._tt_hits += 1
             return self._ttable[key]
 
         moves = engine.generate_legal_moves(state, dice)
         if not moves or depth == 0 or engine.is_terminal(state):
             val = self._evaluate(state, maximizing_player)
             self._ttable[key] = (val, None)
+            self._tt_stores += 1
             return val, None
 
         player = state.turn
@@ -186,8 +227,11 @@ class ExpectiminimaxAgent(Agent):
 
         for move in moves:
             self._time_check(deadline)
-            next_state = engine.apply_move(state, move)
-            value = self._search_chance(next_state, depth - 1, maximizing_player, deadline)
+            undo = engine.apply_move_inplace(state, move)
+            try:
+                value = self._search_chance(state, depth - 1, maximizing_player, deadline, ply + 1)
+            finally:
+                engine.undo_move_inplace(state, undo)
             if player is maximizing_player:
                 if value > best_value or (value == best_value and best_move is None):
                     best_value, best_move = value, move
@@ -196,26 +240,32 @@ class ExpectiminimaxAgent(Agent):
                     best_value, best_move = value, move
 
         self._ttable[key] = (best_value, best_move)
+        self._tt_stores += 1
         return best_value, best_move
 
     def _search_chance(
-        self, state, depth: int, maximizing_player: Player, deadline: Optional[float]
+        self, state, depth: int, maximizing_player: Player, deadline: Optional[float], ply: int
     ) -> float:
         self._time_check(deadline)
+        self._nodes += 1
+        self._depth_reached = max(self._depth_reached, ply)
         key = (state.key(), depth, "chance", maximizing_player)
         if key in self._ttable:
+            self._tt_hits += 1
             return self._ttable[key][0]
 
         if depth == 0 or engine.is_terminal(state):
             val = self._evaluate(state, maximizing_player)
             self._ttable[key] = (val, None)
+            self._tt_stores += 1
             return val
 
         total = 0.0
         for dice in range(1, 7):
             self._time_check(deadline)
-            val, _ = self._search_decision(state, dice, depth, maximizing_player, deadline)
+            val, _ = self._search_decision(state, dice, depth, maximizing_player, deadline, ply + 1)
             total += val
         avg = total / 6.0
         self._ttable[key] = (avg, None)
+        self._tt_stores += 1
         return avg

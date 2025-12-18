@@ -10,13 +10,22 @@ from __future__ import annotations
 import argparse
 import random
 import time
-from typing import Callable, List, Optional, Sequence
+from dataclasses import dataclass
+from typing import Callable, Dict, List, Optional, Sequence
 
 from . import engine
-from .agents import ExpectiminimaxAgent, HeuristicAgent, RandomAgent
+from .agents import ExpectiminimaxAgent, HeuristicAgent, RandomAgent, SearchStats
 from .types import GameState, Player
 
 AgentFactory = Callable[[Optional[int]], RandomAgent]
+
+
+@dataclass
+class GameSummary:
+    winner: Player
+    turns: int
+    move_times: Dict[Player, List[float]]
+    search_stats: Dict[Player, List[SearchStats]]
 
 
 def _build_agent(name: str, seed: Optional[int]):
@@ -67,21 +76,26 @@ def _format_board(board: List[List[int]]) -> str:
     return "\n".join(lines)
 
 
-def _play_game(
+def play_game(
     red_agent,
     blue_agent,
     first: Player,
     seed: Optional[int],
     time_limit_seconds: Optional[int],
-    verbose: bool,
+    emit_moves: bool,
+    show_board: bool,
+    show_stats: bool,
+    collect_stats: bool,
     red_order: Optional[Sequence[int]],
     blue_order: Optional[Sequence[int]],
-) -> Player:
+) -> GameSummary:
     rng = random.Random(seed)
     time_remaining = {
         Player.RED: float("inf") if time_limit_seconds is None else float(time_limit_seconds),
         Player.BLUE: float("inf") if time_limit_seconds is None else float(time_limit_seconds),
     }
+    move_times: Dict[Player, List[float]] = {Player.RED: [], Player.BLUE: []}
+    search_stats: Dict[Player, List[SearchStats]] = {Player.RED: [], Player.BLUE: []}
 
     def _budget(player: Player) -> Optional[int]:
         remaining = time_remaining[player]
@@ -108,9 +122,14 @@ def _play_game(
         blue_order_final = _select_order(blue_agent, Player.BLUE, blue_order)
     except TimeoutError as exc:
         timed_out_player: Player = exc.args[0]
-        if verbose:
+        if emit_moves or show_board:
             print(f"{timed_out_player.name} exceeded time selecting layout. {timed_out_player.opponent().name} wins by timeout.")
-        return timed_out_player.opponent()
+        return GameSummary(
+            winner=timed_out_player.opponent(),
+            turns=0,
+            move_times=move_times,
+            search_stats=search_stats,
+        )
 
     layout_red = arrangement_to_layout(red_order_final, engine.START_RED_CELLS)
     layout_blue = arrangement_to_layout(blue_order_final, engine.START_BLUE_CELLS)
@@ -127,32 +146,56 @@ def _play_game(
         move = agent.choose_move(state, dice, time_budget_ms=budget_ms)
         elapsed = time.monotonic() - start
         time_remaining[player] -= elapsed
+        move_times[player].append(elapsed * 1000.0)
         if time_remaining[player] < 0:
-            if verbose:
+            if emit_moves or show_board:
                 print(f"{player.name} exceeded time. {player.opponent().name} wins by timeout.")
-            return player.opponent()
+            return GameSummary(
+                winner=player.opponent(),
+                turns=turn_counter,
+                move_times=move_times,
+                search_stats=search_stats,
+            )
 
-        print(f"Turn {turn_counter}: {player.name} rolled {dice} -> {move}")
+        if emit_moves:
+            print(f"Turn {turn_counter}: {player.name} rolled {dice} -> {move}")
         state = engine.apply_move(state, move)
         turn_counter += 1
 
-        if verbose:
+        if show_board:
             print(_format_board(state.board))
             print()
 
+        if collect_stats and isinstance(agent, ExpectiminimaxAgent) and agent.last_stats is not None:
+            stats = agent.last_stats
+            total_tt = stats.tt_hits + stats.tt_stores
+            hit_rate = 0.0 if total_tt == 0 else stats.tt_hits / total_tt
+            if show_stats:
+                print(
+                    f"{player.name} expecti stats: depth={stats.depth_reached} nodes={stats.nodes} "
+                    f"tt_hit_rate={hit_rate:.3f} elapsed_ms={stats.elapsed_ms:.2f}"
+                )
+            search_stats[player].append(stats)
+
         victor = engine.winner(state)
         if victor is not None:
-            if verbose:
+            if show_board:
                 print(f"Winner: {victor.name}")
-            return victor
+            return GameSummary(
+                winner=victor,
+                turns=turn_counter - 1,
+                move_times=move_times,
+                search_stats=search_stats,
+            )
 
 
-def _play_match(
+def play_match(
     red_agent,
     blue_agent,
     seed: Optional[int],
     time_limit_seconds: Optional[int],
     verbose: bool,
+    show_stats: bool,
     red_order: Optional[Sequence[int]],
     blue_order: Optional[Sequence[int]],
 ) -> None:
@@ -166,18 +209,21 @@ def _play_match(
         game_seed = base_rng.randint(0, 2**31 - 1)
         if verbose:
             print(f"=== Game {game_index} (first: {first.name}) ===")
-        victor = _play_game(
+        summary = play_game(
             red_agent=red_agent,
             blue_agent=blue_agent,
             first=first,
             seed=game_seed,
             time_limit_seconds=time_limit_seconds,
-            verbose=verbose,
+            emit_moves=True,
+            show_board=verbose,
+            show_stats=show_stats,
+            collect_stats=show_stats,
             red_order=red_order,
             blue_order=blue_order,
         )
-        wins[victor] += 1
-        print(f"Result: {victor.name} wins (score {wins[Player.RED]}-{wins[Player.BLUE]})")
+        wins[summary.winner] += 1
+        print(f"Result: {summary.winner.name} wins (score {wins[Player.RED]}-{wins[Player.BLUE]})")
 
     overall = Player.RED if wins[Player.RED] > wins[Player.BLUE] else Player.BLUE
     print(f"Match winner: {overall.name}")
@@ -193,6 +239,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--red-layout", type=str, default=None, help="Comma-separated permutation like 1,2,3,4,5,6")
     parser.add_argument("--blue-layout", type=str, default=None, help="Comma-separated permutation like 6,5,4,3,2,1")
+    parser.add_argument("--stats", action="store_true", help="Print expecti search stats each move")
     return parser.parse_args(argv)
 
 
@@ -211,24 +258,28 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     try:
         if args.mode == "game":
-            victor = _play_game(
+            summary = play_game(
                 red_agent=red_agent,
                 blue_agent=blue_agent,
                 first=Player.RED,
                 seed=args.seed,
                 time_limit_seconds=args.time_limit_seconds,
-                verbose=args.verbose,
+                emit_moves=True,
+                show_board=args.verbose,
+                show_stats=args.stats,
+                collect_stats=args.stats,
                 red_order=red_order,
                 blue_order=blue_order,
             )
-            print(f"Game winner: {victor.name}")
+            print(f"Game winner: {summary.winner.name}")
         else:
-            _play_match(
+            play_match(
                 red_agent=red_agent,
                 blue_agent=blue_agent,
                 seed=args.seed,
                 time_limit_seconds=args.time_limit_seconds,
                 verbose=args.verbose,
+                show_stats=args.stats,
                 red_order=red_order,
                 blue_order=blue_order,
             )

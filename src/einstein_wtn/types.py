@@ -8,7 +8,7 @@ Rule reminders (see AGENTS.md):
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Dict, List, Optional, Tuple
 
@@ -52,11 +52,12 @@ class GameState:
     alive_red: int
     alive_blue: int
     turn: Player
+    _key_cache: Optional[Tuple] = field(default=None, init=False, repr=False, compare=False)
 
     def clone(self) -> "GameState":
         """Return a deep copy of the state."""
 
-        return GameState(
+        clone_state = GameState(
             board=[row[:] for row in self.board],
             pos_red={k: v for k, v in self.pos_red.items()},
             pos_blue={k: v for k, v in self.pos_blue.items()},
@@ -64,9 +65,13 @@ class GameState:
             alive_blue=self.alive_blue,
             turn=self.turn,
         )
+        clone_state._key_cache = None if self._key_cache is None else self._key_cache
+        return clone_state
 
     def key(self) -> Tuple:
         """Return a hashable key capturing board layout and turn."""
 
-        flattened = tuple(cell for row in self.board for cell in row)
-        return (self.turn, flattened, self.alive_red, self.alive_blue)
+        if self._key_cache is None:
+            flattened = tuple(cell for row in self.board for cell in row)
+            self._key_cache = (self.turn, flattened, self.alive_red, self.alive_blue)
+        return self._key_cache
