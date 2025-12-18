@@ -14,11 +14,12 @@ from .engine import (
     new_game,
     winner,
 )
-from .agents import Agent, HeuristicAgent, RandomAgent
+from .agents import Agent, ExpectiminimaxAgent, HeuristicAgent, RandomAgent
 
 __all__ = [
     "Agent",
     "BOARD_SIZE",
+    "ExpectiminimaxAgent",
     "GameState",
     "HeuristicAgent",
     "Move",

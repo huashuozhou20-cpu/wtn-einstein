@@ -4,6 +4,7 @@ A minimal, testable implementation of the WTN Einstein board game with simple ag
 
 ## Project Layout
 - `src/einstein_wtn/` — game types, engine logic, agents, and CLI runner.
+- `tests/` — pytest suite covering movement candidates, boundary moves, capture handling, terminal detection, RNG determinism, and layout/search behavior.
 - `tests/` — pytest suite covering movement candidates, boundary moves, capture handling, terminal detection, and RNG determinism.
 - `.github/workflows/ci.yml` — CI for Python 3.11.
 
@@ -28,4 +29,10 @@ Run a sample game:
 
 ```bash
 python -m einstein_wtn.runner --mode game --red heuristic --blue random --seed 42
+```
+
+Use the expectiminimax agent and specify layouts explicitly (comma-separated permutations of 1..6) if desired:
+
+```bash
+python -m einstein_wtn.runner --mode game --red expecti --blue heuristic --seed 3 --red-layout "1,2,3,4,5,6" --blue-layout "6,5,4,3,2,1"
 ```
