@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Callable, Dict, List, Optional, Sequence
 
 from . import engine
-from .agents import ExpectiminimaxAgent, HeuristicAgent, RandomAgent, SearchStats
+from .agents import ExpectiminimaxAgent, HeuristicAgent, OpeningExpectiAgent, RandomAgent, SearchStats
 from .opening import LayoutSearchAgent
 from .types import GameState, Player
 
@@ -38,6 +38,8 @@ def _build_agent(name: str, seed: Optional[int]):
         return ExpectiminimaxAgent(seed=seed)
     if name == "layoutsearch":
         return LayoutSearchAgent(seed=seed)
+    if name in {"opening-expecti", "opening_expecti"}:
+        return OpeningExpectiAgent(seed=seed)
     raise ValueError(f"Unknown agent '{name}'")
 
 
@@ -169,7 +171,8 @@ def play_game(
             print(_format_board(state.board))
             print()
 
-        if collect_stats and isinstance(agent, ExpectiminimaxAgent) and agent.last_stats is not None:
+        is_search_agent = isinstance(agent, (ExpectiminimaxAgent, OpeningExpectiAgent))
+        if collect_stats and is_search_agent and getattr(agent, "last_stats", None) is not None:
             stats = agent.last_stats
             total_tt = stats.tt_hits + stats.tt_stores
             hit_rate = 0.0 if total_tt == 0 else stats.tt_hits / total_tt
@@ -235,8 +238,12 @@ def play_match(
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Einstein WTN runner")
     parser.add_argument("--mode", choices=["game", "match"], required=True)
-    parser.add_argument("--red", choices=["random", "heuristic", "expecti", "layoutsearch"], default="heuristic")
-    parser.add_argument("--blue", choices=["random", "heuristic", "expecti", "layoutsearch"], default="random")
+    parser.add_argument(
+        "--red", choices=["random", "heuristic", "expecti", "layoutsearch", "opening-expecti"], default="heuristic"
+    )
+    parser.add_argument(
+        "--blue", choices=["random", "heuristic", "expecti", "layoutsearch", "opening-expecti"], default="random"
+    )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--time-limit-seconds", type=int, default=240)
     parser.add_argument("--verbose", action="store_true")

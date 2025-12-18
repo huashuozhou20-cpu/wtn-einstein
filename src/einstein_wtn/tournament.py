@@ -11,7 +11,7 @@ import random
 from dataclasses import dataclass
 from typing import Dict, Optional, Sequence
 
-from .agents import ExpectiminimaxAgent, HeuristicAgent, RandomAgent, SearchStats
+from .agents import ExpectiminimaxAgent, HeuristicAgent, OpeningExpectiAgent, RandomAgent, SearchStats
 from .opening import LayoutSearchAgent
 from .runner import parse_layout_string, play_game
 from .types import Player
@@ -44,6 +44,8 @@ def _build_agent(name: str, seed: Optional[int]):
         return ExpectiminimaxAgent(seed=seed)
     if name == "layoutsearch":
         return LayoutSearchAgent(seed=seed)
+    if name in {"opening-expecti", "opening_expecti"}:
+        return OpeningExpectiAgent(seed=seed)
     raise ValueError(f"Unknown agent '{name}'")
 
 
@@ -137,8 +139,12 @@ def run_tournament(
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Einstein WTN tournament/benchmark runner")
     parser.add_argument("--games", type=int, default=200)
-    parser.add_argument("--red", choices=["random", "heuristic", "expecti", "layoutsearch"], default="expecti")
-    parser.add_argument("--blue", choices=["random", "heuristic", "expecti", "layoutsearch"], default="heuristic")
+    parser.add_argument(
+        "--red", choices=["random", "heuristic", "expecti", "layoutsearch", "opening-expecti"], default="expecti"
+    )
+    parser.add_argument(
+        "--blue", choices=["random", "heuristic", "expecti", "layoutsearch", "opening-expecti"], default="heuristic"
+    )
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--time-limit-seconds", type=int, default=240)
     parser.add_argument("--red-layout", type=str, default=None)

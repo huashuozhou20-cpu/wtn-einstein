@@ -47,6 +47,14 @@ python -m einstein_wtn.runner --mode game --red expecti --blue heuristic --seed 
   python -m einstein_wtn.tournament --games 200 --red layoutsearch --blue heuristic --seed 0 --stats
   ```
 
+### Hybrid Opening + Expectiminimax
+- The `opening-expecti` agent uses layoutsearch for openings and expectiminimax for moves.
+- Example benchmarks:
+  ```bash
+  python -m einstein_wtn.tournament --games 200 --red opening-expecti --blue heuristic --seed 0 --stats
+  python -m einstein_wtn.tournament --games 200 --red heuristic --blue opening-expecti --seed 0 --stats
+  ```
+
 ## Benchmark / Tournament
 - Run 200 games expecti vs heuristic (quiet by default):
   ```bash

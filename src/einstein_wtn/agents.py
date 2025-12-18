@@ -5,10 +5,13 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 
 from . import engine
 from .types import Move, Player
+
+if TYPE_CHECKING:
+    from .opening import LayoutSearchAgent
 
 
 @dataclass
@@ -352,3 +355,30 @@ class ExpectiminimaxAgent(Agent):
         self._ttable[key] = (avg, None)
         self._tt_stores += 1
         return avg
+
+
+class OpeningExpectiAgent(Agent):
+    """Hybrid agent: layout search for openings, expectiminimax for moves."""
+
+    def __init__(
+        self,
+        seed: Optional[int] = None,
+        layout_budget_ms: int = 200,
+        move_agent_kwargs: Optional[dict] = None,
+    ):
+        from .opening import LayoutSearchAgent
+
+        self.opening = LayoutSearchAgent(seed=seed)
+        kwargs = move_agent_kwargs or {}
+        self.move_agent = ExpectiminimaxAgent(seed=seed, **kwargs)
+        self.layout_budget_ms = layout_budget_ms
+        self.last_stats: Optional[SearchStats] = None
+
+    def choose_initial_layout(self, player: Player, time_budget_ms: Optional[int] = None) -> List[int]:
+        budget = self.layout_budget_ms if time_budget_ms is None else time_budget_ms
+        return self.opening.choose_initial_layout(player, time_budget_ms=budget)
+
+    def choose_move(self, state, dice: int, time_budget_ms: Optional[int] = None) -> Move:
+        move = self.move_agent.choose_move(state, dice, time_budget_ms=time_budget_ms)
+        self.last_stats = self.move_agent.last_stats
+        return move
