@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import itertools
+import random
 import time
-from typing import Iterable, List, Sequence
+from typing import Dict, Iterable, List, Sequence
 
 from . import engine
-from .agents import HeuristicAgent
+from .agents import ExpectiminimaxAgent, HeuristicAgent
 from .types import Player
 
 
@@ -86,78 +87,131 @@ def _arrangement_to_layout(order: Sequence[int], start_cells: Sequence[tuple[int
     return layout  # type: ignore[return-value]
 
 
-def score_layout(layout: Sequence[int], player: Player, budget_ms: int | None = None, seed: int | None = None) -> float:
-    """Score a layout; may include a short playout within budget.
-
-    Falls back to a static score if time is short.
-    """
+def score_layout(
+    layout: Sequence[int],
+    player: Player,
+    budget_ms: int | None = None,
+    seed: int | None = None,
+    mode: str = "mini-expecti",
+    opponent_layouts: Sequence[Sequence[int]] | None = None,
+) -> float:
+    """Score a layout with either static or mini-expecti evaluation."""
 
     start = time.monotonic()
-    if budget_ms is not None and budget_ms <= 5:
+    if budget_ms is not None and budget_ms <= 5 or mode == "static":
         return _static_layout_score(layout, player)
 
-    rng_seed = seed or 0
-    rng = iter((rng_seed * 1103515245 + 12345 + i) % (2**31) for i in itertools.count())
+    rng = random.Random(seed or 0)
 
-    base_agent = HeuristicAgent(seed=next(rng))
-    opponent_agent = HeuristicAgent(seed=next(rng))
-    opp_layout = opponent_agent.choose_initial_layout(player.opponent())
+    # Prepare opponent layouts; include a heuristic placement to avoid overfitting.
+    if opponent_layouts is None:
+        heuristic_order = HeuristicAgent(seed=seed).choose_initial_layout(player.opponent())
+        opponent_layouts = [
+            [1, 2, 3, 4, 5, 6],
+            [6, 5, 4, 3, 2, 1],
+            heuristic_order,
+        ]
+
+    expecti = ExpectiminimaxAgent(max_depth=2, seed=rng.randrange(2**31))
+    opponent_agent = HeuristicAgent(seed=rng.randrange(2**31))
 
     layout_cells = engine.START_RED_CELLS if player is Player.RED else engine.START_BLUE_CELLS
     opp_cells = engine.START_BLUE_CELLS if player is Player.RED else engine.START_RED_CELLS
 
-    layout_coords = _arrangement_to_layout(layout, layout_cells)
-    opp_coords = _arrangement_to_layout(opp_layout, opp_cells)
+    dice_sequences = [[rng.randrange(6) + 1 for _ in range(6)] for _ in range(10)]
+    seqs_to_use = len(dice_sequences)
+    if budget_ms is not None:
+        seqs_to_use = max(1, min(len(dice_sequences), max(1, budget_ms // 12)))
 
-    first = player
-    state = engine.new_game(layout_coords if player is Player.RED else opp_coords,
-                            opp_coords if player is Player.RED else layout_coords,
-                            first=first)
+    scores = []
+    for opp_layout in opponent_layouts:
+        layout_coords = _arrangement_to_layout(layout, layout_cells)
+        opp_coords = _arrangement_to_layout(opp_layout, opp_cells)
+        state = engine.new_game(
+            layout_coords if player is Player.RED else opp_coords,
+            opp_coords if player is Player.RED else layout_coords,
+            first=player,
+        )
 
-    max_turns = 8
-    dice_sequence = [(next(rng) % 6) + 1 for _ in range(max_turns)]
-
-    for idx in range(max_turns):
+        for seq in dice_sequences[:seqs_to_use]:
+            sim_state = state.clone()
+            for dice in seq:
+                mover = sim_state.turn
+                if mover is player:
+                    mv = expecti.choose_move(sim_state, dice, time_budget_ms=8)
+                else:
+                    mv = opponent_agent.choose_move(sim_state, dice, time_budget_ms=4)
+                sim_state = engine.apply_move(sim_state, mv)
+                if engine.is_terminal(sim_state):
+                    break
+            victor = engine.winner(sim_state)
+            if victor is player:
+                scores.append(float("inf"))
+            elif victor is player.opponent():
+                scores.append(float("-inf"))
+            else:
+                val = expecti._evaluate(sim_state, player)  # type: ignore[attr-defined]
+                scores.append(val)
         if budget_ms is not None and (time.monotonic() - start) * 1000 > budget_ms:
             break
-        dice = dice_sequence[idx]
-        current = state.turn
-        agent = base_agent if current is player else opponent_agent
-        move = agent.choose_move(state, dice)
-        state = engine.apply_move(state, move)
-        if engine.is_terminal(state):
-            break
 
-    # Use Red perspective eval and flip if player is Blue.
-    red_score = _red_position_score(state)
-    return red_score if player is Player.RED else -red_score
+    if not scores:
+        return _static_layout_score(layout, player)
+    if any(s == float("inf") for s in scores):
+        return float("inf")
+    if any(s == float("-inf") for s in scores):
+        return float("-inf")
+    return sum(scores) / len(scores)
 
 
 class LayoutSearchAgent(HeuristicAgent):
     """Agent that searches opening layouts within a small time budget."""
 
-    def __init__(self, seed: int | None = None, sample_size: int = 100, top_k: int = 15):
+    def __init__(
+        self,
+        seed: int | None = None,
+        sample_size: int = 90,
+        top_k: int = 12,
+        layout_eval_mode: str = "mini-expecti",
+        layout_eval_budget_ms: int = 300,
+    ):
         super().__init__(seed=seed)
         self.sample_size = sample_size
         self.top_k = top_k
         self._seed = seed or 0
+        self.layout_eval_mode = layout_eval_mode
+        self.layout_eval_budget_ms = layout_eval_budget_ms
+        self.last_opening_stats: Dict[str, float | int] | None = None
 
     def choose_initial_layout(self, player: Player, time_budget_ms: int | None = None) -> List[int]:
         budget_ms = 200 if time_budget_ms is None else time_budget_ms
         start = time.monotonic()
-        rng = self._rng
+        rng = random.Random(self._seed)
 
         layouts = list(generate_all_layouts())
-        rng.shuffle(layouts)
-        candidates = layouts[: min(self.sample_size, len(layouts))]
+        static_scored = [(_static_layout_score(layout, player) + rng.random() * 1e-6, layout) for layout in layouts]
+        static_scored.sort(key=lambda item: item[0], reverse=True)
+        candidates = [layout for _, layout in static_scored[: min(self.sample_size, len(static_scored))]]
+        baseline = [
+            [1, 2, 3, 4, 5, 6],
+            [6, 5, 4, 3, 2, 1],
+            HeuristicAgent(seed=self._seed).choose_initial_layout(player),
+        ]
+        for layout in baseline:
+            if layout not in candidates:
+                candidates.append(tuple(layout))
+        max_candidates = min(len(candidates), max(1, budget_ms // 90))
 
         scored = []
-        per_candidate_budget = max(5, budget_ms // max(1, len(candidates)))
-        for layout in candidates:
-            elapsed_ms = (time.monotonic() - start) * 1000
-            if elapsed_ms > budget_ms * 0.9:
-                break
-            val = score_layout(layout, player, budget_ms=per_candidate_budget, seed=self._seed)
+        per_candidate_budget = max(25, budget_ms // max(1, max_candidates))
+        for layout in candidates[:max_candidates]:
+            val = score_layout(
+                layout,
+                player,
+                budget_ms=min(per_candidate_budget, self.layout_eval_budget_ms),
+                seed=self._seed,
+                mode=self.layout_eval_mode,
+            )
             scored.append((val, layout))
 
         if not scored:
@@ -168,12 +222,19 @@ class LayoutSearchAgent(HeuristicAgent):
 
         best_score = None
         best_layout = None
-        for val, layout in finalists:
+        refine_limit = min(3, len(finalists))
+        for val, layout in finalists[:refine_limit]:
             elapsed_ms = (time.monotonic() - start) * 1000
             if elapsed_ms > budget_ms:
                 break
             # Refine with slightly more budget if available.
-            refined = score_layout(layout, player, budget_ms=min(50, max(5, budget_ms // 2)), seed=self._seed + 1)
+            refined = score_layout(
+                layout,
+                player,
+                budget_ms=min(self.layout_eval_budget_ms, max(5, budget_ms // max(2, refine_limit))),
+                seed=self._seed + 1,
+                mode=self.layout_eval_mode,
+            )
             total_score = (val + refined) / 2
             if best_score is None or total_score > best_score:
                 best_score = total_score
@@ -181,4 +242,13 @@ class LayoutSearchAgent(HeuristicAgent):
 
         if best_layout is None:
             best_layout = finalists[0][1]
+            best_score = finalists[0][0]
+        elapsed_ms = (time.monotonic() - start) * 1000
+        self.last_opening_stats = {
+            "evaluated_candidates": len(scored),
+            "top_k": len(finalists),
+            "elapsed_ms": elapsed_ms,
+            "best_score": best_score if best_score is not None else 0.0,
+            "mode": self.layout_eval_mode,
+        }
         return list(best_layout)

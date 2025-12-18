@@ -198,6 +198,15 @@ def main(argv=None):
                 f"{side.name} expecti stats: samples={summary.samples} avg_depth={summary.avg_depth:.2f} "
                 f"avg_nodes={summary.avg_nodes:.1f} tt_hit_rate={summary.tt_hit_rate:.3f}"
             )
+        # Print opening stats if available.
+        for agent, name in ((red_agent, "RED"), (blue_agent, "BLUE")):
+            opening_stats = getattr(agent, "last_opening_stats", None)
+            if opening_stats:
+                print(
+                    f"{name} opening stats: evaluated={opening_stats.get('evaluated_candidates')} "
+                    f"top_k={opening_stats.get('top_k')} elapsed_ms={opening_stats.get('elapsed_ms'):.1f} "
+                    f"best_score={opening_stats.get('best_score')}"
+                )
 
 
 if __name__ == "__main__":

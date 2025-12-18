@@ -106,7 +106,7 @@ def play_game(
         remaining = time_remaining[player]
         if remaining == float("inf"):
             return None
-        return max(0, int(min(remaining * 1000, 100)))
+        return max(0, int(min(remaining * 1000, 600)))
 
     def _select_order(agent, player: Player, provided: Optional[Sequence[int]]) -> List[int]:
         start = time.monotonic()
@@ -182,6 +182,13 @@ def play_game(
                     f"tt_hit_rate={hit_rate:.3f} elapsed_ms={stats.elapsed_ms:.2f}"
                 )
             search_stats[player].append(stats)
+        if show_stats and hasattr(agent, "last_opening_stats") and getattr(agent, "last_opening_stats", None):
+            opening = agent.last_opening_stats
+            print(
+                f"{player.name} opening stats: evaluated={opening.get('evaluated_candidates')} "
+                f"top_k={opening.get('top_k')} elapsed_ms={opening.get('elapsed_ms'):.1f} "
+                f"best_score={opening.get('best_score')}"
+            )
 
         victor = engine.winner(state)
         if victor is not None:

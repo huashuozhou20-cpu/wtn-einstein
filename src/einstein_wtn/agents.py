@@ -363,7 +363,7 @@ class OpeningExpectiAgent(Agent):
     def __init__(
         self,
         seed: Optional[int] = None,
-        layout_budget_ms: int = 200,
+        layout_budget_ms: int = 400,
         move_agent_kwargs: Optional[dict] = None,
     ):
         from .opening import LayoutSearchAgent
