@@ -36,6 +36,11 @@ class Agent:
         _ = time_budget_ms  # Unused in the base class.
         return [1, 2, 3, 4, 5, 6]
 
+    def _order_moves(self, state, moves: List[Move]) -> List[Move]:
+        """Return moves without reordering; subclasses may override."""
+
+        return list(moves)
+
 
 class RandomAgent(Agent):
     """Agent that selects a random legal move with reproducible seeding."""
@@ -47,6 +52,7 @@ class RandomAgent(Agent):
         moves = engine.generate_legal_moves(state, dice)
         if not moves:
             raise ValueError("No legal moves available")
+        moves = self._order_moves(state, moves)
         return self._rng.choice(moves)
 
     def choose_initial_layout(self, player: Player, time_budget_ms: Optional[int] = None) -> List[int]:
@@ -93,6 +99,7 @@ class HeuristicAgent(Agent):
     def choose_move(self, state, dice: int, time_budget_ms: Optional[int] = None) -> Move:
         player = state.turn
         moves = engine.generate_legal_moves(state, dice)
+        moves = self._order_moves(state, moves)
         if not moves:
             raise ValueError("No legal moves available")
 
@@ -187,21 +194,91 @@ class ExpectiminimaxAgent(Agent):
         """Heuristic score from Red's perspective (higher favors Red)."""
 
         score = 0.0
-        alive_red = state.alive_red.bit_count()
-        alive_blue = state.alive_blue.bit_count()
-        score += (alive_red - alive_blue) * 10
 
+        # A) Material: weight higher ids slightly to value surviving power.
+        for pid, coord in state.pos_red.items():
+            if coord is not None:
+                score += 2 + pid * 0.5
+        for pid, coord in state.pos_blue.items():
+            if coord is not None:
+                score -= 2 + pid * 0.5
+
+        # B) Distance: emphasize the two closest runners to stabilize signal.
         def dist(player: Player, coord) -> int:
             target = engine.TARGET_RED if player is Player.RED else engine.TARGET_BLUE
             return abs(target[0] - coord[0]) + abs(target[1] - coord[1])
 
+        red_dists = sorted([dist(Player.RED, coord) for coord in state.pos_red.values() if coord is not None])
+        blue_dists = sorted([dist(Player.BLUE, coord) for coord in state.pos_blue.values() if coord is not None])
+        for d in red_dists[:2]:
+            score += max(0, 6 - d)
+        for d in blue_dists[:2]:
+            score -= max(0, 6 - d)
+
+        # C) Threat/safety: squares an opponent can reach next turn.
+        def reachable_squares(player: Player):
+            dirs = engine.DIRECTIONS_RED if player is Player.RED else engine.DIRECTIONS_BLUE
+            positions = state.pos_red if player is Player.RED else state.pos_blue
+            squares = set()
+            for coord in positions.values():
+                if coord is None:
+                    continue
+                r, c = coord
+                for dr, dc in dirs:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < engine.BOARD_SIZE and 0 <= nc < engine.BOARD_SIZE:
+                        squares.add((nr, nc))
+            return squares
+
+        red_reach = reachable_squares(Player.RED)
+        blue_reach = reachable_squares(Player.BLUE)
+
         for coord in state.pos_red.values():
-            if coord is not None:
-                score += 5 - dist(Player.RED, coord)
+            if coord is not None and coord in blue_reach:
+                score -= 1.5
         for coord in state.pos_blue.values():
-            if coord is not None:
-                score -= 5 - dist(Player.BLUE, coord)
+            if coord is not None and coord in red_reach:
+                score += 1.5
+
         return score
+
+    def _order_moves(self, state, moves: List[Move]) -> List[Move]:
+        """Sort moves to improve search: win > capture > progress > self-capture."""
+
+        player = state.turn
+        target = engine.TARGET_RED if player is Player.RED else engine.TARGET_BLUE
+
+        def is_capture(move: Move) -> bool:
+            r, c = move.to_rc
+            occupant = state.board[r][c]
+            return (occupant > 0 and player is Player.BLUE) or (occupant < 0 and player is Player.RED)
+
+        def is_self_capture(move: Move) -> bool:
+            r, c = move.to_rc
+            occupant = state.board[r][c]
+            return (occupant > 0 and player is Player.RED) or (occupant < 0 and player is Player.BLUE)
+
+        def distance_gain(move: Move) -> int:
+            fr, fc = move.from_rc
+            tr, tc = move.to_rc
+            before = abs(target[0] - fr) + abs(target[1] - fc)
+            after = abs(target[0] - tr) + abs(target[1] - tc)
+            return before - after
+
+        def win_move(move: Move) -> bool:
+            next_state = engine.apply_move(state, move)
+            return engine.winner(next_state) == player
+
+        scored = []
+        for mv in moves:
+            win = win_move(mv)
+            capture = is_capture(mv)
+            self_cap = is_self_capture(mv)
+            gain = distance_gain(mv)
+            scored.append((not win, not capture, self_cap, -gain, len(scored), mv))
+
+        scored.sort()
+        return [item[-1] for item in scored]
 
     def _search_decision(
         self,

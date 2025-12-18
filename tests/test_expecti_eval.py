@@ -49,3 +49,12 @@ def test_expecti_blue_picks_immediate_win():
 
     move = agent.choose_move(state, dice=1, time_budget_ms=200)
     assert move.to_rc == engine.TARGET_BLUE
+
+def test_ordering_prioritizes_immediate_win():
+    state = build_state(red_map={1: (3, 3)}, blue_map={2: (0, 0)}, turn=Player.RED)
+    agent = ExpectiminimaxAgent(seed=3)
+    moves = engine.generate_legal_moves(state, dice=1)
+    ordered = agent._order_moves(state, moves)
+    assert ordered, "Expected moves to order"
+    first_move = ordered[0]
+    assert engine.winner(engine.apply_move(state, first_move)) == Player.RED
