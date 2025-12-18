@@ -180,6 +180,12 @@ class ExpectiminimaxAgent(Agent):
         if victor is maximizing_player.opponent():
             return float("-inf")
 
+        score_red = self._red_score(state)
+        return score_red if maximizing_player is Player.RED else -score_red
+
+    def _red_score(self, state) -> float:
+        """Heuristic score from Red's perspective (higher favors Red)."""
+
         score = 0.0
         alive_red = state.alive_red.bit_count()
         alive_blue = state.alive_blue.bit_count()
