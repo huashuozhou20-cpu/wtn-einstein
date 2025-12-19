@@ -151,6 +151,16 @@ class ExpectiminimaxAgent(Agent):
             raise ValueError("No legal moves available")
 
         fallback = self._heuristic.choose_move(state, dice, time_budget_ms=time_budget_ms)
+        if time_budget_ms is not None and time_budget_ms < 10:
+            elapsed_ms = (time.monotonic() - start_time) * 1000.0
+            self.last_stats = SearchStats(
+                nodes=0,
+                depth_reached=0,
+                tt_hits=0,
+                tt_stores=0,
+                elapsed_ms=elapsed_ms,
+            )
+            return fallback
         deadline = None if time_budget_ms is None else time.monotonic() + (time_budget_ms / 1000.0)
         best_move = fallback
         self._ttable = {}

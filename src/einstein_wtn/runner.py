@@ -16,6 +16,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 from . import engine
 from .agents import ExpectiminimaxAgent, HeuristicAgent, OpeningExpectiAgent, RandomAgent, SearchStats
 from .opening import LayoutSearchAgent
+from .time_manager import TimeManagerConfig, compute_move_budget_ms
 from .types import GameState, Player
 
 AgentFactory = Callable[[Optional[int]], RandomAgent]
@@ -102,7 +103,7 @@ def play_game(
     move_times: Dict[Player, List[float]] = {Player.RED: [], Player.BLUE: []}
     search_stats: Dict[Player, List[SearchStats]] = {Player.RED: [], Player.BLUE: []}
 
-    def _budget(player: Player) -> Optional[int]:
+    def _layout_budget(player: Player) -> Optional[int]:
         remaining = time_remaining[player]
         if remaining == float("inf"):
             return None
@@ -113,7 +114,7 @@ def play_game(
         if provided is not None:
             order = list(provided)
         else:
-            order = agent.choose_initial_layout(player, time_budget_ms=_budget(player))
+            order = agent.choose_initial_layout(player, time_budget_ms=_layout_budget(player))
         elapsed = time.monotonic() - start
         time_remaining[player] -= elapsed
         if time_remaining[player] < 0:
@@ -145,7 +146,19 @@ def play_game(
         player = state.turn
         dice = rng.randint(1, 6)
         agent = red_agent if player is Player.RED else blue_agent
-        budget_ms = None if time_limit_seconds is None else max(0, int(time_remaining[player] * 1000))
+        remaining_ms = time_remaining[player] * 1000 if time_limit_seconds is not None else None
+        budget_flags = []
+        if time_limit_seconds is None:
+            budget_ms = None
+        else:
+            budget_ms = compute_move_budget_ms(
+                state,
+                dice,
+                remaining_ms=remaining_ms,
+                agent_name=agent.__class__.__name__,
+                cfg=TimeManagerConfig(),
+            )
+            budget_flags = getattr(compute_move_budget_ms, "last_flags", [])
 
         start = time.monotonic()
         move = agent.choose_move(state, dice, time_budget_ms=budget_ms)
@@ -177,9 +190,13 @@ def play_game(
             total_tt = stats.tt_hits + stats.tt_stores
             hit_rate = 0.0 if total_tt == 0 else stats.tt_hits / total_tt
             if show_stats:
+                flag_str = "[" + ",".join(budget_flags) + "]" if budget_flags else "[]"
+                remaining_after = max(0.0, time_remaining[player])
                 print(
                     f"{player.name} expecti stats: depth={stats.depth_reached} nodes={stats.nodes} "
-                    f"tt_hit_rate={hit_rate:.3f} elapsed_ms={stats.elapsed_ms:.2f}"
+                    f"tt_hit_rate={hit_rate:.3f} elapsed_ms={stats.elapsed_ms:.2f} "
+                    f"remaining_ms={remaining_after*1000:.1f} budget_ms={budget_ms if budget_ms is not None else -1} "
+                    f"flags={flag_str}"
                 )
             search_stats[player].append(stats)
         if show_stats and hasattr(agent, "last_opening_stats") and getattr(agent, "last_opening_stats", None):
