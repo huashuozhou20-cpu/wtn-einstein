@@ -22,6 +22,10 @@ class SearchStats:
     depth_reached: int
     tt_hits: int
     tt_stores: int
+    killer_hits: int
+    history_hits: int
+    killer_size: int
+    history_size: int
     elapsed_ms: float
 
 
@@ -127,11 +131,16 @@ class ExpectiminimaxAgent(Agent):
         self._heuristic = HeuristicAgent(seed=seed)
         self._rng = random.Random(seed)
         self._ttable = {}
+        self.killer_moves: dict[int, list[str]] = {}
+        self.history: dict[tuple[int, str], int] = {}
         self.last_stats: Optional[SearchStats] = None
         self._nodes = 0
         self._tt_hits = 0
         self._tt_stores = 0
         self._depth_reached = 0
+        self._killer_hits = 0
+        self._history_hits = 0
+        self._killer_depth_window = 12
 
     def choose_initial_layout(self, player: Player, time_budget_ms: Optional[int] = None) -> List[int]:
         """Mirror the heuristic agent placement to prioritize depth toward the goal."""
@@ -144,7 +153,11 @@ class ExpectiminimaxAgent(Agent):
         self._tt_hits = 0
         self._tt_stores = 0
         self._depth_reached = 0
+        self._killer_hits = 0
+        self._history_hits = 0
         start_time = time.monotonic()
+
+        self._decay_memory()
 
         moves = engine.generate_legal_moves(state, dice)
         if not moves:
@@ -158,6 +171,10 @@ class ExpectiminimaxAgent(Agent):
                 depth_reached=0,
                 tt_hits=0,
                 tt_stores=0,
+                killer_hits=0,
+                history_hits=0,
+                killer_size=len(self.killer_moves),
+                history_size=len(self.history),
                 elapsed_ms=elapsed_ms,
             )
             return fallback
@@ -168,7 +185,14 @@ class ExpectiminimaxAgent(Agent):
         for depth in range(1, self.max_depth + 1):
             try:
                 value, move = self._search_decision(
-                    state, dice, depth, maximizing_player=state.turn, deadline=deadline, ply=0
+                    state,
+                    dice,
+                    depth,
+                    maximizing_player=state.turn,
+                    deadline=deadline,
+                    ply=0,
+                    alpha=float("-inf"),
+                    beta=float("inf"),
                 )
                 self._depth_reached = max(self._depth_reached, depth)
             except TimeoutError:
@@ -185,9 +209,33 @@ class ExpectiminimaxAgent(Agent):
             depth_reached=self._depth_reached,
             tt_hits=self._tt_hits,
             tt_stores=self._tt_stores,
+            killer_hits=self._killer_hits,
+            history_hits=self._history_hits,
+            killer_size=len(self.killer_moves),
+            history_size=len(self.history),
             elapsed_ms=elapsed_ms,
         )
         return best_move
+
+    def _decay_memory(self) -> None:
+        """Gently decay history scores and prune stale killer depths between moves."""
+
+        if self.history:
+            decayed: dict[tuple[int, str], int] = {}
+            for key, score in self.history.items():
+                player_key, sig = key
+                player_id = player_key.value if isinstance(player_key, Player) else int(player_key)
+                new_score = int(score * 0.8)
+                if new_score > 0:
+                    decayed[(player_id, sig)] = new_score
+            self.history = decayed
+
+        if self.killer_moves:
+            pruned: dict[int, list[str]] = {}
+            for depth, killers in self.killer_moves.items():
+                if depth <= self._killer_depth_window:
+                    pruned[depth] = killers[:2]
+            self.killer_moves = pruned
 
     def _time_check(self, deadline: Optional[float]) -> None:
         if deadline is not None and time.monotonic() > deadline:
@@ -255,11 +303,36 @@ class ExpectiminimaxAgent(Agent):
 
         return score
 
-    def _order_moves(self, state, moves: List[Move]) -> List[Move]:
-        """Sort moves to improve search: win > capture > progress > self-capture."""
+    def _move_signature(self, move: Move) -> str:
+        """Return a stable string signature for a move."""
+
+        return f"{move.piece_id}:{move.from_rc}->{move.to_rc}"
+
+    def _record_killer(self, depth: int, move: Move) -> None:
+        """Track killer moves per depth, keeping the two most recent."""
+
+        sig = self._move_signature(move)
+        killers = self.killer_moves.setdefault(depth, [])
+        if sig in killers:
+            return
+        killers.insert(0, sig)
+        if len(killers) > 2:
+            killers.pop()
+
+    def _record_history(self, player: Player, move: Move, depth: int) -> None:
+        """Reward moves that cause beta cutoffs with a depth-weighted score."""
+
+        sig = self._move_signature(move)
+        bonus = max(1, depth) * max(1, depth)
+        key = (player.value, sig)
+        self.history[key] = self.history.get(key, 0) + bonus
+
+    def _order_moves(self, state, moves: List[Move], ply: Optional[int] = None) -> List[Move]:
+        """Sort moves using win/killers/history before tactical heuristics."""
 
         player = state.turn
         target = engine.TARGET_RED if player is Player.RED else engine.TARGET_BLUE
+        killers = set(self.killer_moves.get(ply, [])) if ply is not None else set()
 
         def is_capture(move: Move) -> bool:
             r, c = move.to_rc
@@ -283,12 +356,30 @@ class ExpectiminimaxAgent(Agent):
             return engine.winner(next_state) == player
 
         scored = []
-        for mv in moves:
+        for idx, mv in enumerate(moves):
             win = win_move(mv)
+            sig = self._move_signature(mv)
+            killer_hit = sig in killers
+            if killer_hit:
+                self._killer_hits += 1
+            history_score = self.history.get((player.value, sig), 0)
+            if history_score > 0:
+                self._history_hits += 1
             capture = is_capture(mv)
             self_cap = is_self_capture(mv)
             gain = distance_gain(mv)
-            scored.append((not win, not capture, self_cap, -gain, len(scored), mv))
+            scored.append(
+                (
+                    -int(win),
+                    -int(killer_hit),
+                    -history_score,
+                    -int(capture),
+                    -gain,
+                    int(self_cap),
+                    idx,
+                    mv,
+                )
+            )
 
         scored.sort()
         return [item[-1] for item in scored]
@@ -301,6 +392,8 @@ class ExpectiminimaxAgent(Agent):
         maximizing_player: Player,
         deadline: Optional[float],
         ply: int,
+        alpha: float = float("-inf"),
+        beta: float = float("inf"),
     ) -> tuple[float, Optional[Move]]:
         self._time_check(deadline)
         self._nodes += 1
@@ -321,26 +414,47 @@ class ExpectiminimaxAgent(Agent):
         best_value = float("-inf") if player is maximizing_player else float("inf")
         best_move = None
 
-        for move in moves:
+        ordered_moves = self._order_moves(state, moves, ply=ply)
+
+        for move in ordered_moves:
             self._time_check(deadline)
             undo = engine.apply_move_inplace(state, move)
             try:
-                value = self._search_chance(state, depth - 1, maximizing_player, deadline, ply + 1)
+                value = self._search_chance(
+                    state, depth - 1, maximizing_player, deadline, ply + 1, alpha, beta
+                )
             finally:
                 engine.undo_move_inplace(state, undo)
             if player is maximizing_player:
                 if value > best_value or (value == best_value and best_move is None):
                     best_value, best_move = value, move
+                alpha = max(alpha, best_value)
+                if alpha >= beta:
+                    self._record_killer(ply, move)
+                    self._record_history(player, move, depth)
+                    break
             else:
                 if value < best_value or (value == best_value and best_move is None):
                     best_value, best_move = value, move
+                beta = min(beta, best_value)
+                if beta <= alpha:
+                    self._record_killer(ply, move)
+                    self._record_history(player, move, depth)
+                    break
 
         self._ttable[key] = (best_value, best_move)
         self._tt_stores += 1
         return best_value, best_move
 
     def _search_chance(
-        self, state, depth: int, maximizing_player: Player, deadline: Optional[float], ply: int
+        self,
+        state,
+        depth: int,
+        maximizing_player: Player,
+        deadline: Optional[float],
+        ply: int,
+        alpha: float,
+        beta: float,
     ) -> float:
         self._time_check(deadline)
         self._nodes += 1
@@ -359,7 +473,9 @@ class ExpectiminimaxAgent(Agent):
         total = 0.0
         for dice in range(1, 7):
             self._time_check(deadline)
-            val, _ = self._search_decision(state, dice, depth, maximizing_player, deadline, ply + 1)
+            val, _ = self._search_decision(
+                state, dice, depth, maximizing_player, deadline, ply + 1, alpha, beta
+            )
             total += val
         avg = total / 6.0
         self._ttable[key] = (avg, None)
