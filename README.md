@@ -37,18 +37,20 @@ Use the expectiminimax agent and specify layouts explicitly (comma-separated per
   ```
 
 ## GUI Human vs AI
-- Launch the Tkinter UI:
+- Launch the Tkinter UI (defaults to Chinese; pass `--lang en` for English):
   ```bash
-  python -m einstein_wtn.ui_tk
+  python -m einstein_wtn.ui_tk --lang zh
   ```
-- Choose Red/Blue agents (`human`/`heuristic`/`expecti`/`opening-expecti`/`random`) plus mode:
+- Language toggle and refreshed layout: the right control panel groups Game/Mode/Agents/Dice/Input/AI actions with clearer padding, and you can switch 中文/English at any time to relabel buttons and status text.
+- Board usability: larger piece fonts, colored squares (light red/blue pieces, gray empties), highlighted origins (orange) and legal destinations (green) to avoid misclicks.
+- Mode & agents: choose Red/Blue agents (`human`/`heuristic`/`expecti`/`opening-expecti`/`random`) plus mode:
   - **play**: humans move their side, AI moves the other side automatically when you click **AI / Advise move**.
   - **advise**: enter the opponent move manually, then request an advised reply (optionally auto-apply).
-- Dice controls: **Roll dice** for a random 1–6 or **Set dice** to enter a specific value (useful for analysis/replay).
-- Move input: click a piece belonging to the side to move, then click a highlighted legal destination; the board updates after each move.
+- Dice controls: **Roll dice** for a random 1–6 or **Set dice** to enter a specific value (useful for analysis/replay). The info bar lists which pieces are movable for the current dice, plus nearest substitutes if the dice piece is gone.
+- Move input: click a piece belonging to the side to move, then click a highlighted legal destination; the board updates after each move. A status line shows any input errors in red.
 - Text move entry: paste WTN-style snippets such as `12:5;(B3,D2)`, `(R5,C3)`, or `B3 D2` into the **Enter move (WTN)** box; dice in the text must match the current die roll.
 - Layout controls: optional comma-separated layout orders (e.g., `1,2,3,4,5,6`) let you pin openings; otherwise agents pick their own.
-- WTN saving: **Save WTN** writes the current game (layouts + moves) to a timestamped `.wtn.txt` file, embedding the chosen agent names in comments.
+- WTN saving: **Save WTN** writes the current game (layouts + moves) to a timestamped `.wtn.txt` file, embedding the chosen agent names in comments. A “Copy last move” button copies the most recent move string for sharing.
 
 ## Competition Stdio Adapter
 - A line-oriented adapter suitable for on-site events is available via:

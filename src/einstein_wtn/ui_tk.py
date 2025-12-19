@@ -1,6 +1,7 @@
 """Tkinter interface for human play, move entry, and AI advice."""
 from __future__ import annotations
 
+import argparse
 import random
 import time
 import tkinter as tk
@@ -12,6 +13,7 @@ from typing import List, Optional, Set, Tuple
 from . import engine
 from .agents import ExpectiminimaxAgent, HeuristicAgent, OpeningExpectiAgent, RandomAgent
 from .game_controller import GameController
+from .i18n import available_langs, t
 from .types import Move, Player
 from .wtn_format import rc_to_sq
 
@@ -23,37 +25,57 @@ AGENT_CHOICES = [
     ("random", RandomAgent),
 ]
 
+CELL_COLORS = {
+    "empty": "#f5f5f5",
+    "red": "#fce4ec",
+    "blue": "#e3f2fd",
+    "red_border": "#c62828",
+    "blue_border": "#1565c0",
+    "highlight": "#ffb74d",
+    "legal": "#81c784",
+}
+
 
 class EinsteinTkApp:
-    """Simple Tkinter UI supporting play and move advising."""
+    """Tkinter UI supporting play and move advising with bilingual text."""
 
-    def __init__(self) -> None:
+    def __init__(self, lang: str = "zh") -> None:
+        self.lang = lang if lang in available_langs() else "zh"
+
         self.root = tk.Tk()
-        self.root.title("Einstein WTN - Human vs AI")
+        self.root.title(t("window_title", self.lang))
+
+        default_font = ("DejaVu Sans", 11)
+        piece_font = ("DejaVu Sans", 16, "bold")
+        self.root.option_add("*Font", default_font)
 
         self.agent_var_red = tk.StringVar(value="human")
         self.agent_var_blue = tk.StringVar(value="expecti")
         self.mode_var = tk.StringVar(value="play")
+        self.lang_var = tk.StringVar(value=self.lang)
         self.auto_apply_var = tk.BooleanVar(value=True)
         self.dice_var = tk.StringVar(value="-")
+        self.status_var = tk.StringVar(value=t("status_ready", self.lang))
+        self.last_move_var = tk.StringVar(value=t("no_last_move", self.lang))
+        self.ai_suggestion_var = tk.StringVar(value=t("no_last_move", self.lang))
+        self.info_can_move_var = tk.StringVar(value="-")
 
         self.red_layout_entry = tk.Entry(self.root)
         self.red_layout_entry.insert(0, "1,2,3,4,5,6")
         self.blue_layout_entry = tk.Entry(self.root)
         self.blue_layout_entry.insert(0, "")
 
-        self.turn_label = tk.Label(self.root, text="Turn: RED")
-        self.dice_label = tk.Label(self.root, text="Dice: -")
+        self.turn_var = tk.StringVar(value=t("turn_label", self.lang).format(turn="RED"))
 
         self.board_buttons: List[List[tk.Button]] = []
         self.selected: Optional[Tuple[int, int]] = None
-        self._default_bg: Optional[str] = None
         self._highlighted: Set[Tuple[int, int]] = set()
 
-        self.log_text = tk.Text(self.root, height=12, width=40, state=tk.DISABLED)
+        self.log_text = tk.Text(self.root, height=12, width=48, state=tk.DISABLED)
+        self.log_text.configure(font=("DejaVu Sans Mono", 10))
 
         self.controller = self._build_controller()
-        self._layout_widgets()
+        self._layout_widgets(piece_font)
         self._refresh_board()
 
     def _build_controller(self) -> GameController:
@@ -80,111 +102,248 @@ class EinsteinTkApp:
                 return cls(seed=None) if cls is not None else None
         raise ValueError(f"Unknown agent '{name}'")
 
-    def _layout_widgets(self) -> None:
-        control_frame = tk.Frame(self.root)
-        control_frame.grid(row=0, column=1, sticky="nw", padx=10, pady=10)
+    def _layout_widgets(self, piece_font) -> None:
+        main = ttk.Frame(self.root, padding=12)
+        main.grid(row=0, column=0, sticky="nsew")
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main.columnconfigure(0, weight=1)
+        main.columnconfigure(1, weight=0)
+        main.rowconfigure(0, weight=1)
+        main.rowconfigure(1, weight=1)
 
-        tk.Label(control_frame, text="Mode:").grid(row=0, column=0, sticky="w")
-        mode_menu = tk.OptionMenu(control_frame, self.mode_var, "play", "advise")
-        mode_menu.grid(row=0, column=1, sticky="w")
-
-        tk.Label(control_frame, text="Auto apply advice").grid(row=1, column=0, sticky="w")
-        tk.Checkbutton(control_frame, variable=self.auto_apply_var).grid(row=1, column=1, sticky="w")
-
-        tk.Label(control_frame, text="Red agent").grid(row=2, column=0, sticky="w")
-        tk.OptionMenu(
-            control_frame,
-            self.agent_var_red,
-            *[label for label, _ in AGENT_CHOICES],
-            command=lambda _: self._on_agents_changed(),
-        ).grid(row=2, column=1, sticky="w")
-
-        tk.Label(control_frame, text="Blue agent").grid(row=3, column=0, sticky="w")
-        tk.OptionMenu(
-            control_frame,
-            self.agent_var_blue,
-            *[label for label, _ in AGENT_CHOICES],
-            command=lambda _: self._on_agents_changed(),
-        ).grid(row=3, column=1, sticky="w")
-
-        tk.Label(control_frame, text="Red layout (optional)").grid(row=4, column=0, sticky="w")
-        self.red_layout_entry.grid(row=4, column=1, sticky="w")
-        tk.Label(control_frame, text="Blue layout (optional)").grid(row=5, column=0, sticky="w")
-        self.blue_layout_entry.grid(row=5, column=1, sticky="w")
-
-        tk.Button(control_frame, text="New Game", command=self._on_new_game).grid(
-            row=6, column=0, pady=4, sticky="we", columnspan=2
-        )
-
-        tk.Button(control_frame, text="Roll dice", command=self._on_roll_dice).grid(
-            row=7, column=0, sticky="we", columnspan=2
-        )
-        tk.Label(control_frame, text="Set dice:").grid(row=8, column=0, sticky="w")
-        self.dice_entry = tk.Entry(control_frame, width=5)
-        self.dice_entry.grid(row=8, column=1, sticky="w")
-        tk.Button(control_frame, text="Apply", command=self._on_set_dice).grid(
-            row=8, column=2, sticky="w"
-        )
-
-        tk.Label(control_frame, text="Enter move (WTN):").grid(row=9, column=0, sticky="w")
-        self.move_text_entry = ttk.Entry(control_frame, width=18)
-        self.move_text_entry.grid(row=9, column=1, sticky="w")
-        self.move_text_entry.bind("<Return>", lambda _: self._on_text_move())
-        tk.Button(control_frame, text="Apply", command=self._on_text_move).grid(
-            row=9, column=2, sticky="w"
-        )
-
-        tk.Button(control_frame, text="AI / Advise move", command=self._on_ai_move).grid(
-            row=10, column=0, columnspan=2, sticky="we", pady=4
-        )
-        tk.Button(control_frame, text="Save WTN", command=self._on_save_wtn).grid(
-            row=11, column=0, columnspan=2, sticky="we"
-        )
-
-        self.turn_label.grid(row=1, column=1, sticky="w")
-        self.dice_label.grid(row=2, column=1, sticky="w")
-
-        board_frame = tk.Frame(self.root)
-        board_frame.grid(row=0, column=0, rowspan=12, padx=10, pady=10)
+        board_frame = ttk.Frame(main)
+        self.board_frame = board_frame
+        board_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        board_frame.columnconfigure(tuple(range(engine.BOARD_SIZE)), weight=1)
+        board_frame.rowconfigure(tuple(range(engine.BOARD_SIZE)), weight=1)
         for r in range(engine.BOARD_SIZE):
             row_buttons: List[tk.Button] = []
             for c in range(engine.BOARD_SIZE):
                 btn = tk.Button(
                     board_frame,
                     text="",
-                    width=4,
-                    height=2,
+                    width=6,
+                    height=3,
+                    font=piece_font,
+                    relief=tk.RAISED,
                     command=lambda rr=r, cc=c: self._on_square_click(rr, cc),
                 )
-                btn.grid(row=r, column=c)
+                btn.grid(row=r, column=c, padx=1, pady=1, sticky="nsew")
                 row_buttons.append(btn)
             self.board_buttons.append(row_buttons)
-        if self.board_buttons and self.board_buttons[0]:
-            self._default_bg = self.board_buttons[0][0].cget("background")
 
-        log_frame = tk.Frame(self.root)
-        log_frame.grid(row=12, column=0, columnspan=2, pady=8, padx=10, sticky="we")
-        tk.Label(log_frame, text="Move log").pack(anchor="w")
-        self.log_text.pack(in_=log_frame, fill="both", expand=True)
+        control_frame = ttk.Frame(main)
+        control_frame.grid(row=0, column=1, sticky="n")
+
+        language_frame = ttk.Frame(control_frame)
+        language_frame.grid(row=0, column=0, sticky="we", pady=(0, 6))
+        self.language_label = ttk.Label(language_frame, text=t("language_label", self.lang))
+        self.language_label.grid(row=0, column=0, sticky="w")
+        self.language_combo = ttk.Combobox(
+            language_frame,
+            textvariable=self.lang_var,
+            values=available_langs(),
+            state="readonly",
+            width=6,
+        )
+        self.language_combo.grid(row=0, column=1, padx=6)
+        self.language_combo.bind("<<ComboboxSelected>>", lambda _: self._on_language_changed())
+
+        self.status_label = ttk.Label(control_frame, textvariable=self.status_var, foreground="#c62828")
+        self.status_label.grid(row=1, column=0, sticky="w", pady=(0, 6))
+
+        game_frame = ttk.LabelFrame(control_frame, text=t("game_group", self.lang), padding=8)
+        self.game_frame = game_frame
+        game_frame.grid(row=2, column=0, sticky="we", pady=4)
+        self.new_game_button = ttk.Button(game_frame, text=t("new_game", self.lang), command=self._on_new_game)
+        self.new_game_button.grid(row=0, column=0, padx=4, pady=2, sticky="we")
+        self.save_wtn_button = ttk.Button(game_frame, text=t("save_wtn", self.lang), command=self._on_save_wtn)
+        self.save_wtn_button.grid(row=0, column=1, padx=4, pady=2, sticky="we")
+
+        agents_frame = ttk.LabelFrame(control_frame, text=t("agents_group", self.lang), padding=8)
+        self.agents_frame = agents_frame
+        agents_frame.grid(row=3, column=0, sticky="we", pady=4)
+        self.red_agent_label = ttk.Label(agents_frame, text=t("red_agent", self.lang))
+        self.red_agent_label.grid(row=0, column=0, sticky="w")
+        ttk.OptionMenu(
+            agents_frame,
+            self.agent_var_red,
+            self.agent_var_red.get(),
+            *[label for label, _ in AGENT_CHOICES],
+            command=lambda *_: self._on_agents_changed(),
+        ).grid(row=0, column=1, sticky="we", padx=4)
+        self.blue_agent_label = ttk.Label(agents_frame, text=t("blue_agent", self.lang))
+        self.blue_agent_label.grid(row=1, column=0, sticky="w")
+        ttk.OptionMenu(
+            agents_frame,
+            self.agent_var_blue,
+            self.agent_var_blue.get(),
+            *[label for label, _ in AGENT_CHOICES],
+            command=lambda *_: self._on_agents_changed(),
+        ).grid(row=1, column=1, sticky="we", padx=4)
+        self.red_layout_label = ttk.Label(agents_frame, text=t("layouts_red", self.lang))
+        self.red_layout_label.grid(row=2, column=0, sticky="w")
+        self.red_layout_entry.grid(in_=agents_frame, row=2, column=1, sticky="we", padx=4, pady=1)
+        self.blue_layout_label = ttk.Label(agents_frame, text=t("layouts_blue", self.lang))
+        self.blue_layout_label.grid(row=3, column=0, sticky="w")
+        self.blue_layout_entry.grid(in_=agents_frame, row=3, column=1, sticky="we", padx=4, pady=1)
+
+        mode_frame = ttk.LabelFrame(control_frame, text=t("mode_group", self.lang), padding=8)
+        self.mode_frame = mode_frame
+        mode_frame.grid(row=4, column=0, sticky="we", pady=4)
+        self.mode_play_radio = ttk.Radiobutton(
+            mode_frame, text=t("mode_play", self.lang), variable=self.mode_var, value="play"
+        )
+        self.mode_play_radio.grid(row=0, column=0, sticky="w")
+        self.mode_advise_radio = ttk.Radiobutton(
+            mode_frame, text=t("mode_advise", self.lang), variable=self.mode_var, value="advise"
+        )
+        self.mode_advise_radio.grid(row=0, column=1, sticky="w", padx=6)
+        self.auto_apply_check = ttk.Checkbutton(mode_frame, text=t("auto_apply", self.lang), variable=self.auto_apply_var)
+        self.auto_apply_check.grid(
+            row=1, column=0, columnspan=2, sticky="w", pady=(4, 0)
+        )
+
+        dice_frame = ttk.LabelFrame(control_frame, text=t("dice_group", self.lang), padding=8)
+        self.dice_frame = dice_frame
+        dice_frame.grid(row=5, column=0, sticky="we", pady=4)
+        self.roll_button = ttk.Button(dice_frame, text=t("roll_dice", self.lang), command=self._on_roll_dice)
+        self.roll_button.grid(row=0, column=0, padx=4, pady=2, sticky="we")
+        self.set_dice_label = ttk.Label(dice_frame, text=t("set_dice", self.lang))
+        self.set_dice_label.grid(row=0, column=1, sticky="e")
+        self.dice_entry = ttk.Entry(dice_frame, width=6)
+        self.dice_entry.grid(row=0, column=2, sticky="w")
+        self.apply_dice_button = ttk.Button(dice_frame, text=t("apply", self.lang), command=self._on_set_dice)
+        self.apply_dice_button.grid(row=0, column=3, padx=4, sticky="w")
+
+        input_frame = ttk.LabelFrame(control_frame, text=t("input_group", self.lang), padding=8)
+        self.input_frame = input_frame
+        input_frame.grid(row=6, column=0, sticky="we", pady=4)
+        self.input_label = ttk.Label(input_frame, text=t("enter_move", self.lang))
+        self.input_label.grid(row=0, column=0, sticky="w")
+        self.move_text_entry = ttk.Entry(input_frame, width=22)
+        self.move_text_entry.grid(row=1, column=0, sticky="we", pady=2)
+        self.move_text_entry.bind("<Return>", lambda _: self._on_text_move())
+        self.apply_text_button = ttk.Button(input_frame, text=t("apply", self.lang), command=self._on_text_move)
+        self.apply_text_button.grid(row=1, column=1, padx=6)
+
+        ai_frame = ttk.LabelFrame(control_frame, text=t("ai_group", self.lang), padding=8)
+        self.ai_frame = ai_frame
+        ai_frame.grid(row=7, column=0, sticky="we", pady=4)
+        self.ai_move_button = ttk.Button(ai_frame, text=t("ai_move", self.lang), command=self._on_ai_move)
+        self.ai_move_button.grid(row=0, column=0, padx=4, pady=2, sticky="we")
+
+        info_frame = ttk.Frame(main, padding=(0, 8, 0, 0))
+        info_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
+        info_frame.columnconfigure(0, weight=1)
+
+        summary_frame = ttk.Frame(info_frame)
+        summary_frame.grid(row=0, column=0, sticky="we")
+        ttk.Label(summary_frame, textvariable=self.turn_var, font=("DejaVu Sans", 12, "bold")).grid(
+            row=0, column=0, padx=(0, 12), sticky="w"
+        )
+        self.dice_label = ttk.Label(summary_frame, text=t("dice_label", self.lang).format(dice="-"))
+        self.dice_label.grid(row=0, column=1, padx=(0, 12), sticky="w")
+        self.can_move_label = ttk.Label(summary_frame, textvariable=self.info_can_move_var)
+        self.can_move_label.grid(row=0, column=2, sticky="w")
+
+        recent_frame = ttk.Frame(info_frame)
+        recent_frame.grid(row=1, column=0, sticky="we", pady=4)
+        self.last_move_label = ttk.Label(recent_frame, text=t("info_last_move", self.lang))
+        self.last_move_label.grid(row=0, column=0, sticky="w")
+        ttk.Label(recent_frame, textvariable=self.last_move_var).grid(row=0, column=1, sticky="w")
+        ttk.Button(recent_frame, text=t("copy_last", self.lang), command=self._on_copy_last_move).grid(
+            row=0, column=2, padx=6
+        )
+        self.ai_suggestion_label = ttk.Label(recent_frame, text=t("info_ai_suggestion", self.lang))
+        self.ai_suggestion_label.grid(row=1, column=0, sticky="w")
+        ttk.Label(recent_frame, textvariable=self.ai_suggestion_var).grid(row=1, column=1, sticky="w")
+
+        log_frame = ttk.LabelFrame(info_frame, text=t("move_log", self.lang), padding=8)
+        self.log_frame = log_frame
+        log_frame.grid(row=2, column=0, sticky="nsew", pady=(6, 0))
+        log_frame.columnconfigure(0, weight=1)
+        log_text_frame = ttk.Frame(log_frame)
+        log_text_frame.grid(row=0, column=0, sticky="nsew")
+        log_frame.rowconfigure(0, weight=1)
+        scrollbar = ttk.Scrollbar(log_text_frame, orient=tk.VERTICAL)
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.log_text.config(yscrollcommand=scrollbar.set)
+        scrollbar.config(command=self.log_text.yview)
+        self.log_text.grid(in_=log_text_frame, row=0, column=0, sticky="nsew")
+        log_text_frame.columnconfigure(0, weight=1)
+
+    def _refresh_texts(self) -> None:
+        self.root.title(t("window_title", self.lang))
+        self.language_label.configure(text=t("language_label", self.lang))
+        self.language_combo.configure(values=available_langs())
+        for frame, label in [
+            (self.game_frame, "game_group"),
+            (self.agents_frame, "agents_group"),
+            (self.mode_frame, "mode_group"),
+            (self.dice_frame, "dice_group"),
+            (self.input_frame, "input_group"),
+            (self.ai_frame, "ai_group"),
+            (self.log_frame, "move_log"),
+        ]:
+            frame.configure(text=t(label, self.lang))
+        self.new_game_button.configure(text=t("new_game", self.lang))
+        self.save_wtn_button.configure(text=t("save_wtn", self.lang))
+        self.red_agent_label.configure(text=t("red_agent", self.lang))
+        self.blue_agent_label.configure(text=t("blue_agent", self.lang))
+        self.red_layout_label.configure(text=t("layouts_red", self.lang))
+        self.blue_layout_label.configure(text=t("layouts_blue", self.lang))
+        self.mode_play_radio.configure(text=t("mode_play", self.lang))
+        self.mode_advise_radio.configure(text=t("mode_advise", self.lang))
+        self.auto_apply_check.configure(text=t("auto_apply", self.lang))
+        self.roll_button.configure(text=t("roll_dice", self.lang))
+        self.set_dice_label.configure(text=t("set_dice", self.lang))
+        self.apply_dice_button.configure(text=t("apply", self.lang))
+        self.input_label.configure(text=t("enter_move", self.lang))
+        self.apply_text_button.configure(text=t("apply", self.lang))
+        self.ai_move_button.configure(text=t("ai_move", self.lang))
+        self.last_move_label.configure(text=t("info_last_move", self.lang))
+        self.ai_suggestion_label.configure(text=t("info_ai_suggestion", self.lang))
+        self.status_var.set(t("status_ready", self.lang))
+        self.turn_var.set(t("turn_label", self.lang).format(turn=self.controller.state.turn.name))
+        self.dice_label.configure(text=t("dice_label", self.lang).format(dice=self.dice_var.get()))
+        self.log_frame.configure(text=t("move_log", self.lang))
+        self._update_move_hints()
+
+    def _on_language_changed(self) -> None:
+        self.lang = self.lang_var.get()
+        self._refresh_texts()
+        self._refresh_board()
+
+    def _set_status(self, msg: str, is_error: bool = False) -> None:
+        if is_error:
+            self.status_var.set(t("status_error_prefix", self.lang).format(msg=msg))
+        else:
+            self.status_var.set(msg)
 
     def _on_agents_changed(self) -> None:
-        self._log("Agents changed; start a new game to apply.")
+        self._log(t("agents_changed", self.lang))
+        self._set_status(t("agents_changed", self.lang), is_error=False)
 
     def _on_new_game(self) -> None:
         try:
             self.controller = self._build_controller()
         except Exception as exc:
-            messagebox.showerror("Error", f"Failed to start game: {exc}")
+            messagebox.showerror(t("game_over", self.lang), str(exc))
+            self._set_status(str(exc), is_error=True)
             return
         self.selected = None
         self._clear_highlights()
         self._refresh_board()
-        self._log("New game started")
+        self._set_status(t("new_game_started", self.lang))
+        self._log(t("new_game_started", self.lang))
 
     def _on_roll_dice(self) -> None:
         value = self.controller.roll_dice(random.Random())
         self._update_dice(value)
         self._clear_selection_state()
+        self._update_move_hints()
 
     def _on_set_dice(self) -> None:
         raw = self.dice_entry.get().strip()
@@ -195,27 +354,31 @@ class EinsteinTkApp:
             self.controller.set_dice(value)
             self._update_dice(value)
         except Exception as exc:
-            messagebox.showerror("Error", f"Invalid dice: {exc}")
+            messagebox.showerror(t("dice_group", self.lang), t("illegal_move", self.lang).format(reason=exc))
+            self._set_status(str(exc), is_error=True)
             return
         self._clear_selection_state()
+        self._update_move_hints()
 
     def _on_text_move(self) -> None:
         text = self.move_text_entry.get().strip()
         if not text:
             return
         if engine.is_terminal(self.controller.state):
-            self._log("Game is over; start a new game to keep playing.")
+            self._log(t("game_over", self.lang))
             return
         if self._is_ai_turn():
-            self._log("AI turn is active; switch to advice mode or wait for AI move.")
+            self._log(t("ai_turn_wait", self.lang))
             return
         if self.controller.dice is None:
-            messagebox.showinfo("Dice required", "Roll or set dice before moving.")
+            messagebox.showinfo(t("dice_group", self.lang), t("dice_needed", self.lang))
             return
         try:
             move = self.controller.apply_text_move(text)
         except Exception as exc:
-            self._log(f"Text move error: {exc}")
+            error = t("text_move_error", self.lang).format(error=exc)
+            self._log(error)
+            self._set_status(str(exc), is_error=True)
             return
         finally:
             self._clear_selection_state()
@@ -225,19 +388,21 @@ class EinsteinTkApp:
 
     def _on_ai_move(self) -> None:
         if self.controller.dice is None:
-            messagebox.showinfo("Dice required", "Set or roll the dice before asking for a move.")
+            messagebox.showinfo(t("dice_group", self.lang), t("dice_needed", self.lang))
             return
         agent = self.controller.red_agent if self.controller.state.turn is Player.RED else self.controller.blue_agent
         apply_move = self.mode_var.get() == "play" or self.auto_apply_var.get()
         if agent is None:
-            messagebox.showinfo("Human turn", "Current player is human; pick a move on the board.")
+            messagebox.showinfo(t("mode_group", self.lang), t("human_turn", self.lang))
             return
         move = self.controller.compute_ai_move(time_budget_ms=200)
         if apply_move:
             self.controller._apply_move(move)
             self._after_move(move)
         else:
-            self._log(f"Advised move: {self._format_move(move)}")
+            text = t("advised_move", self.lang).format(move=self._format_move(move))
+            self.ai_suggestion_var.set(text)
+            self._log(text)
 
     def _on_save_wtn(self) -> None:
         timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -252,23 +417,35 @@ class EinsteinTkApp:
         text = self.controller.to_wtn()
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
-        self._log(f"Saved WTN to {path}")
+        msg = t("saved_wtn", self.lang).format(path=path)
+        self._log(msg)
+        self._set_status(msg)
+
+    def _on_copy_last_move(self) -> None:
+        if not self.controller.history:
+            self._set_status(t("no_last_move", self.lang), is_error=True)
+            return
+        _, move = self.controller.history[-1]
+        payload = self._format_move(move)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(payload)
+        self._set_status(t("copy_done", self.lang))
 
     def _on_square_click(self, r: int, c: int) -> None:
         if engine.is_terminal(self.controller.state):
-            self._log("Game is over; start a new game to keep playing.")
+            self._log(t("game_over", self.lang))
             return
         if self._is_ai_turn():
-            self._log("AI turn is active; wait for AI move or switch to advice mode.")
+            self._log(t("ai_turn_wait", self.lang))
             return
         if self.controller.dice is None:
-            messagebox.showinfo("Dice required", "Roll or set dice before moving.")
+            messagebox.showinfo(t("dice_group", self.lang), t("dice_needed", self.lang))
             return
         cell_value = self.controller.state.board[r][c]
         turn = self.controller.state.turn
         if self.selected is None:
             if (turn is Player.RED and cell_value <= 0) or (turn is Player.BLUE and cell_value >= 0):
-                self._log("Select one of your own pieces to move.")
+                self._log(t("select_own_piece", self.lang))
                 return
             agent = self.controller.red_agent if turn is Player.RED else self.controller.blue_agent
             if agent is not None and self.mode_var.get() == "play":
@@ -276,40 +453,44 @@ class EinsteinTkApp:
             try:
                 destinations = self._legal_destinations_for_cell(r, c)
             except ValueError as exc:
-                messagebox.showerror("Error", str(exc))
+                messagebox.showerror(t("game_group", self.lang), str(exc))
                 return
             if not destinations:
-                self._log(f"This piece cannot move under dice={self.controller.dice}")
+                self._log(t("piece_blocked", self.lang).format(dice=self.controller.dice))
                 return
             self.selected = (r, c)
             self._highlight_selection(destinations, origin=(r, c))
             self._log(
-                "Targets: "
-                + ", ".join(sorted(rc_to_sq(dest[0], dest[1]) for dest in destinations))
+                t("targets", self.lang).format(
+                    targets=", ".join(sorted(rc_to_sq(dest[0], dest[1]) for dest in destinations))
+                )
             )
             return
 
         move = self._find_move(self.selected, (r, c))
         if move is None:
-            self._log("Illegal destination")
+            self._log(t("illegal_destination", self.lang))
             return
         try:
             self.controller.apply_human_move(move)
             self._after_move(move)
         except Exception as exc:
-            messagebox.showerror("Error", f"Illegal move: {exc}")
+            messagebox.showerror(t("game_group", self.lang), t("illegal_move", self.lang).format(reason=exc))
         finally:
             self.selected = None
             self._clear_highlights()
 
     def _after_move(self, move: Move) -> None:
-        self._log(self._format_move(move))
+        move_text = self._format_move(move)
+        self.last_move_var.set(move_text)
+        self._log(move_text)
         self._refresh_board()
         self._update_turn()
         self._clear_highlights()
         if engine.is_terminal(self.controller.state):
             win = engine.winner(self.controller.state)
-            messagebox.showinfo("Game over", f"Winner: {win.name if win else 'Unknown'}")
+            winner_text = win.name if win else "-"
+            messagebox.showinfo(t("game_over", self.lang), t("winner", self.lang).format(winner=winner_text))
             return
         self._maybe_auto_step_ai()
 
@@ -324,7 +505,9 @@ class EinsteinTkApp:
             self._after_move(move)
         else:
             move = self.controller.compute_ai_move(time_budget_ms=200)
-            self._log(f"Advised move: {self._format_move(move)}")
+            text = t("advised_move", self.lang).format(move=self._format_move(move))
+            self.ai_suggestion_var.set(text)
+            self._log(text)
 
     def _find_move(self, from_rc: Tuple[int, int], to_rc: Tuple[int, int]) -> Optional[Move]:
         try:
@@ -341,58 +524,91 @@ class EinsteinTkApp:
         self._clear_highlights()
 
     def _clear_highlights(self) -> None:
-        for r, row in enumerate(self.board_buttons):
-            for c, btn in enumerate(row):
-                base_bg = self._default_bg or btn.cget("background")
-                btn.config(relief=tk.RAISED, highlightthickness=0, background=base_bg)
         self._highlighted.clear()
+        self._reapply_highlights()
 
     def _highlight_selection(
         self, destinations: Set[Tuple[int, int]], origin: Tuple[int, int]
     ) -> None:
-        self._clear_highlights()
-        for r, row in enumerate(self.board_buttons):
-            for c, btn in enumerate(row):
-                if (r, c) == origin:
-                    btn.config(
+        self._highlighted = set(destinations)
+        self.selected = origin
+        self._reapply_highlights()
+
+    def _reapply_highlights(self) -> None:
+        for r in range(engine.BOARD_SIZE):
+            for c in range(engine.BOARD_SIZE):
+                self._render_cell(r, c)
+                btn = self.board_buttons[r][c]
+                if self.selected == (r, c):
+                    btn.configure(
                         relief=tk.SUNKEN,
                         highlightthickness=3,
-                        highlightbackground="orange",
-                        highlightcolor="orange",
+                        highlightbackground=CELL_COLORS["highlight"],
+                        highlightcolor=CELL_COLORS["highlight"],
                     )
-                elif (r, c) in destinations:
-                    btn.config(
+                elif (r, c) in self._highlighted:
+                    btn.configure(
                         highlightthickness=3,
-                        highlightbackground="gold",
-                        highlightcolor="gold",
+                        highlightbackground=CELL_COLORS["legal"],
+                        highlightcolor=CELL_COLORS["legal"],
                     )
-        self._highlighted = set(destinations)
+
+    def _render_cell(self, r: int, c: int) -> None:
+        val = self.controller.state.board[r][c]
+        btn = self.board_buttons[r][c]
+        text = ""
+        bg = CELL_COLORS["empty"]
+        fg = "#444444"
+        if val > 0:
+            text = f"R{val}"
+            bg = CELL_COLORS["red"]
+            fg = CELL_COLORS["red_border"]
+        elif val < 0:
+            text = f"B{abs(val)}"
+            bg = CELL_COLORS["blue"]
+            fg = CELL_COLORS["blue_border"]
+        btn.configure(text=text, background=bg, activebackground=bg, foreground=fg, relief=tk.RAISED, highlightthickness=0)
 
     def _refresh_board(self) -> None:
         for r in range(engine.BOARD_SIZE):
             for c in range(engine.BOARD_SIZE):
-                val = self.controller.state.board[r][c]
-                text = ""
-                if val > 0:
-                    text = f"R{val}"
-                elif val < 0:
-                    text = f"B{abs(val)}"
-                self.board_buttons[r][c].config(text=text)
+                self._render_cell(r, c)
+        self._reapply_highlights()
         self._update_turn()
+        self._update_move_hints()
 
     def _update_turn(self) -> None:
-        self.turn_label.config(text=f"Turn: {self.controller.state.turn.name}")
+        self.turn_var.set(t("turn_label", self.lang).format(turn=self.controller.state.turn.name))
 
     def _update_dice(self, value: int) -> None:
         self.dice_var.set(str(value))
-        self.dice_label.config(text=f"Dice: {value}")
+        self.dice_label.config(text=t("dice_label", self.lang).format(dice=value))
+
+    def _update_move_hints(self) -> None:
+        if self.controller.dice is None:
+            self.info_can_move_var.set(t("info_can_move", self.lang) + ": -")
+            return
+        try:
+            legal = self.controller.legal_moves()
+        except Exception:
+            self.info_can_move_var.set(t("info_can_move", self.lang) + ": -")
+            return
+        pieces = sorted({mv.piece_id for mv in legal})
+        prefix = t("you_can_move", self.lang).format(pieces=", ".join(str(p) for p in pieces)) if pieces else t("info_can_move", self.lang) + ": -"
+        detail = prefix
+        dice_value = self.controller.dice
+        if dice_value is not None and dice_value not in pieces and pieces:
+            nearest = min(pieces, key=lambda p: abs(p - dice_value))
+            alt = [p for p in pieces if abs(p - dice_value) == abs(nearest - dice_value)]
+            detail += " | " + t("nearest_piece", self.lang).format(pieces=", ".join(str(p) for p in sorted(alt)))
+        self.info_can_move_var.set(detail)
 
     def _format_move(self, move: Move) -> str:
         from_r, from_c = move.from_rc
         to_r, to_c = move.to_rc
         dice_value = self.controller.history[-1][0] if self.controller.history else self.controller.dice
         mover = self.controller.state.turn.opponent() if self.controller.history else self.controller._initial_turn
-        return f"{mover.name} dice={dice_value}: {move.piece_id} ({from_r},{from_c})->({to_r},{to_c})"
+        return f"{mover.name} dice={dice_value}: {move.piece_id} {rc_to_sq(from_r, from_c)}->{rc_to_sq(to_r, to_c)}"
 
     def _log(self, msg: str) -> None:
         self.log_text.config(state=tk.NORMAL)
@@ -419,7 +635,10 @@ class EinsteinTkApp:
 
 
 def main() -> None:
-    app = EinsteinTkApp()
+    parser = argparse.ArgumentParser(description="Einstein WTN Tkinter UI")
+    parser.add_argument("--lang", choices=available_langs(), default="zh")
+    args = parser.parse_args()
+    app = EinsteinTkApp(lang=args.lang)
     app.run()
 
 
