@@ -46,6 +46,7 @@ Use the expectiminimax agent and specify layouts explicitly (comma-separated per
   - **advise**: enter the opponent move manually, then request an advised reply (optionally auto-apply).
 - Dice controls: **Roll dice** for a random 1–6 or **Set dice** to enter a specific value (useful for analysis/replay).
 - Move input: click a piece belonging to the side to move, then click a highlighted legal destination; the board updates after each move.
+- Text move entry: paste WTN-style snippets such as `12:5;(B3,D2)`, `(R5,C3)`, or `B3 D2` into the **Enter move (WTN)** box; dice in the text must match the current die roll.
 - Layout controls: optional comma-separated layout orders (e.g., `1,2,3,4,5,6`) let you pin openings; otherwise agents pick their own.
 - WTN saving: **Save WTN** writes the current game (layouts + moves) to a timestamped `.wtn.txt` file, embedding the chosen agent names in comments.
 

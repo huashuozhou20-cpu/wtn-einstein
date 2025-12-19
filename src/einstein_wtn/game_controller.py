@@ -13,6 +13,7 @@ from .agents import HeuristicAgent
 from .runner import arrangement_to_layout, parse_layout_string
 from .types import GameState, Move, Player
 from .wtn_format import WTNGame, dump_wtn
+from .wtn_input import parse_move_text
 
 
 class GameController:
@@ -109,6 +110,29 @@ class GameController:
         if move not in legal:
             raise ValueError("illegal move")
         return self._apply_move(move)
+
+    def apply_text_move(self, raw: str) -> Move:
+        """Parse and apply a move string against the current state and dice."""
+
+        parsed = parse_move_text(raw)
+        if self.dice is None:
+            raise ValueError("dice not set")
+        expected_color = "R" if self.state.turn is Player.RED else "B"
+        if parsed.color != expected_color:
+            raise ValueError("Wrong color to move")
+        if parsed.dice is not None and parsed.dice != self.dice:
+            raise ValueError("Dice in text does not match current dice")
+
+        legal = self.legal_moves()
+        target = None
+        for mv in legal:
+            if mv.piece_id == parsed.piece_id and mv.to_rc == (parsed.to_r, parsed.to_c):
+                target = mv
+                break
+        if target is None:
+            raise ValueError("Move is not legal for current dice")
+        self._apply_move(target)
+        return target
 
     def _apply_move(self, move: Move) -> GameState:
         applied = engine.apply_move(self.state, move)

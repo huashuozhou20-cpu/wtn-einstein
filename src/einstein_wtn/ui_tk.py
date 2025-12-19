@@ -122,7 +122,14 @@ class EinsteinTkApp:
         self.dice_entry = tk.Entry(control_frame, width=5)
         self.dice_entry.grid(row=8, column=1, sticky="w")
         tk.Button(control_frame, text="Apply", command=self._on_set_dice).grid(
-            row=9, column=0, sticky="we", columnspan=2
+            row=8, column=2, sticky="w"
+        )
+
+        tk.Label(control_frame, text="Enter move (WTN):").grid(row=9, column=0, sticky="w")
+        self.move_text_entry.grid(row=9, column=1, sticky="w")
+        self.move_text_entry.bind("<Return>", lambda _: self._on_text_move())
+        tk.Button(control_frame, text="Apply", command=self._on_text_move).grid(
+            row=9, column=2, sticky="w"
         )
 
         tk.Button(control_frame, text="AI / Advise move", command=self._on_ai_move).grid(
@@ -189,6 +196,30 @@ class EinsteinTkApp:
             messagebox.showerror("Error", f"Invalid dice: {exc}")
             return
         self._clear_selection_state()
+
+    def _on_text_move(self) -> None:
+        text = self.move_text_entry.get().strip()
+        if not text:
+            return
+        if engine.is_terminal(self.controller.state):
+            self._log("Game is over; start a new game to keep playing.")
+            return
+        if self._is_ai_turn():
+            self._log("AI turn is active; switch to advice mode or wait for AI move.")
+            return
+        if self.controller.dice is None:
+            messagebox.showinfo("Dice required", "Roll or set dice before moving.")
+            return
+        try:
+            move = self.controller.apply_text_move(text)
+        except Exception as exc:
+            self._log(f"Text move error: {exc}")
+            return
+        finally:
+            self._clear_selection_state()
+
+        self.move_text_entry.delete(0, tk.END)
+        self._after_move(move)
 
     def _on_ai_move(self) -> None:
         if self.controller.dice is None:
