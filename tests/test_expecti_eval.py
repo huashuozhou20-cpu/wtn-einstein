@@ -1,6 +1,6 @@
 from einstein_wtn import engine
 from einstein_wtn.agents import ExpectiminimaxAgent
-from einstein_wtn.types import GameState, Player
+from einstein_wtn.types import GameState, Move, Player
 
 
 def build_state(red_map, blue_map, turn=Player.RED) -> GameState:
@@ -58,3 +58,27 @@ def test_ordering_prioritizes_immediate_win():
     assert ordered, "Expected moves to order"
     first_move = ordered[0]
     assert engine.winner(engine.apply_move(state, first_move)) == Player.RED
+
+
+def test_killer_moves_prioritized():
+    state = build_state(red_map={1: (0, 0)}, blue_map={}, turn=Player.RED)
+    agent = ExpectiminimaxAgent(seed=4)
+    moves = engine.generate_legal_moves(state, dice=1)
+    killer_move = Move(piece_id=1, from_rc=(0, 0), to_rc=(1, 1))
+    agent.killer_moves[1] = [killer_move]
+
+    ordered = agent._order_moves(state, moves, ply=1)
+    assert ordered[0] == killer_move
+
+
+def test_history_influences_order():
+    state = build_state(red_map={1: (0, 0)}, blue_map={}, turn=Player.RED)
+    agent = ExpectiminimaxAgent(seed=5)
+    moves = engine.generate_legal_moves(state, dice=1)
+    target_move = Move(piece_id=1, from_rc=(0, 0), to_rc=(0, 1))
+    other_move = Move(piece_id=1, from_rc=(0, 0), to_rc=(1, 0))
+    agent.history[(Player.RED, agent._move_signature(target_move))] = 25
+    agent.history[(Player.RED, agent._move_signature(other_move))] = 1
+
+    ordered = agent._order_moves(state, moves, ply=1)
+    assert ordered[0] == target_move
