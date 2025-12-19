@@ -36,6 +36,20 @@ Use the expectiminimax agent and specify layouts explicitly (comma-separated per
 python -m einstein_wtn.runner --mode game --red expecti --blue heuristic --seed 3 --red-layout "1,2,3,4,5,6" --blue-layout "6,5,4,3,2,1"
 ```
 
+## Competition Stdio Adapter
+- A line-oriented adapter suitable for on-site events is available via:
+  ```bash
+  python -m einstein_wtn.adapter_stdio --budget-ms 50
+  ```
+- Protocol:
+  - Input:
+    - `INIT <player> <layout_optional>`
+    - `STATE <turn> <dice> <board_csv_25>`
+    - `GO`
+  - Output: `MOVE <piece_id> <to_r> <to_c>` on stdout (one line per `GO`).
+  - Invalid input produces `ERROR <message>` and exits with a non-zero code.
+- The adapter enforces its own deadline (`--budget-ms` defaults to 50 ms) and falls back to the lightweight heuristic agent if the primary search encounters errors or proposes an illegal move. Human-readable logs are printed to stderr for turn/dice/move tracing.
+
 ## Opening / Layout Search
 - The `layoutsearch` agent selects stronger openings by quickly sampling and evaluating layouts before the game starts.
 - Example: play with layoutsearch as Red versus heuristic Blue:
