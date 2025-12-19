@@ -5,6 +5,7 @@ from __future__ import annotations
 import random
 import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Optional, TYPE_CHECKING
 
 from . import engine
@@ -22,6 +23,10 @@ class SearchStats:
     depth_reached: int
     tt_hits: int
     tt_stores: int
+    tt_exact_hits: int
+    tt_lower_hits: int
+    tt_upper_hits: int
+    tt_cutoffs: int
     killer_hits: int
     history_hits: int
     killer_size: int
@@ -126,17 +131,39 @@ class HeuristicAgent(Agent):
 class ExpectiminimaxAgent(Agent):
     """Agent using expectiminimax with iterative deepening over dice chance nodes."""
 
+    class NodeType(str, Enum):
+        """Transposition table node kinds."""
+
+        DECISION = "D"
+        CHANCE = "C"
+
+    class Bound(str, Enum):
+        EXACT = "EXACT"
+        LOWER = "LOWER"
+        UPPER = "UPPER"
+
+    @dataclass
+    class TTEntry:
+        value: float
+        depth: int
+        bound: "ExpectiminimaxAgent.Bound"
+        best_move_sig: Optional[str] = None
+
     def __init__(self, max_depth: int = 3, seed: Optional[int] = None):
         self.max_depth = max_depth
         self._heuristic = HeuristicAgent(seed=seed)
         self._rng = random.Random(seed)
-        self._ttable = {}
+        self._ttable: dict[tuple, "ExpectiminimaxAgent.TTEntry"] = {}
         self.killer_moves: dict[int, list[str]] = {}
         self.history: dict[tuple[int, str], int] = {}
         self.last_stats: Optional[SearchStats] = None
         self._nodes = 0
         self._tt_hits = 0
         self._tt_stores = 0
+        self._tt_exact_hits = 0
+        self._tt_lower_hits = 0
+        self._tt_upper_hits = 0
+        self._tt_cutoffs = 0
         self._depth_reached = 0
         self._killer_hits = 0
         self._history_hits = 0
@@ -152,6 +179,10 @@ class ExpectiminimaxAgent(Agent):
         self._nodes = 0
         self._tt_hits = 0
         self._tt_stores = 0
+        self._tt_exact_hits = 0
+        self._tt_lower_hits = 0
+        self._tt_upper_hits = 0
+        self._tt_cutoffs = 0
         self._depth_reached = 0
         self._killer_hits = 0
         self._history_hits = 0
@@ -171,6 +202,10 @@ class ExpectiminimaxAgent(Agent):
                 depth_reached=0,
                 tt_hits=0,
                 tt_stores=0,
+                tt_exact_hits=0,
+                tt_lower_hits=0,
+                tt_upper_hits=0,
+                tt_cutoffs=0,
                 killer_hits=0,
                 history_hits=0,
                 killer_size=len(self.killer_moves),
@@ -209,6 +244,10 @@ class ExpectiminimaxAgent(Agent):
             depth_reached=self._depth_reached,
             tt_hits=self._tt_hits,
             tt_stores=self._tt_stores,
+            tt_exact_hits=self._tt_exact_hits,
+            tt_lower_hits=self._tt_lower_hits,
+            tt_upper_hits=self._tt_upper_hits,
+            tt_cutoffs=self._tt_cutoffs,
             killer_hits=self._killer_hits,
             history_hits=self._history_hits,
             killer_size=len(self.killer_moves),
@@ -308,6 +347,27 @@ class ExpectiminimaxAgent(Agent):
 
         return f"{move.piece_id}:{move.from_rc}->{move.to_rc}"
 
+    def _tt_key_decision(self, state, dice: int, depth: int, maximizing_player: Player) -> tuple:
+        """Key transposition entries for decision nodes, including dice."""
+
+        return (
+            self.NodeType.DECISION.value,
+            state.key(),
+            depth,
+            maximizing_player,
+            dice,
+        )
+
+    def _tt_key_chance(self, state, depth: int, maximizing_player: Player) -> tuple:
+        """Key transposition entries for chance nodes."""
+
+        return (
+            self.NodeType.CHANCE.value,
+            state.key(),
+            depth,
+            maximizing_player,
+        )
+
     def _record_killer(self, depth: int, move: Move) -> None:
         """Track killer moves per depth, keeping the two most recent."""
 
@@ -384,6 +444,16 @@ class ExpectiminimaxAgent(Agent):
         scored.sort()
         return [item[-1] for item in scored]
 
+    def _sig_to_move(self, sig: Optional[str], state, dice: int) -> Optional[Move]:
+        """Find a legal move by signature if possible."""
+
+        if sig is None:
+            return None
+        for mv in engine.generate_legal_moves(state, dice):
+            if self._move_signature(mv) == sig:
+                return mv
+        return None
+
     def _search_decision(
         self,
         state,
@@ -398,16 +468,32 @@ class ExpectiminimaxAgent(Agent):
         self._time_check(deadline)
         self._nodes += 1
         self._depth_reached = max(self._depth_reached, ply)
-        key = (state.key(), dice, depth, "decision", maximizing_player)
-        if key in self._ttable:
+        alpha_orig = alpha
+        beta_orig = beta
+        key = self._tt_key_decision(state, dice, depth, maximizing_player)
+        entry = self._ttable.get(key)
+        if entry and entry.depth >= depth:
             self._tt_hits += 1
-            return self._ttable[key]
+            if entry.bound is self.Bound.EXACT:
+                self._tt_exact_hits += 1
+                return entry.value, self._sig_to_move(entry.best_move_sig, state, dice)
+            if entry.bound is self.Bound.LOWER:
+                self._tt_lower_hits += 1
+                alpha = max(alpha, entry.value)
+                if alpha >= beta:
+                    self._tt_cutoffs += 1
+                    return entry.value, self._sig_to_move(entry.best_move_sig, state, dice)
+            if entry.bound is self.Bound.UPPER:
+                self._tt_upper_hits += 1
+                beta = min(beta, entry.value)
+                if alpha >= beta:
+                    self._tt_cutoffs += 1
+                    return entry.value, self._sig_to_move(entry.best_move_sig, state, dice)
 
         moves = engine.generate_legal_moves(state, dice)
         if not moves or depth == 0 or engine.is_terminal(state):
             val = self._evaluate(state, maximizing_player)
-            self._ttable[key] = (val, None)
-            self._tt_stores += 1
+            self._store_tt_entry(key, val, depth, self.Bound.EXACT, None)
             return val, None
 
         player = state.turn
@@ -441,9 +527,14 @@ class ExpectiminimaxAgent(Agent):
                     self._record_killer(ply, move)
                     self._record_history(player, move, depth)
                     break
-
-        self._ttable[key] = (best_value, best_move)
-        self._tt_stores += 1
+        best_sig = self._move_signature(best_move) if best_move is not None else None
+        if best_value <= alpha_orig:
+            bound = self.Bound.UPPER
+        elif best_value >= beta_orig:
+            bound = self.Bound.LOWER
+        else:
+            bound = self.Bound.EXACT
+        self._store_tt_entry(key, best_value, depth, bound, best_sig)
         return best_value, best_move
 
     def _search_chance(
@@ -459,15 +550,16 @@ class ExpectiminimaxAgent(Agent):
         self._time_check(deadline)
         self._nodes += 1
         self._depth_reached = max(self._depth_reached, ply)
-        key = (state.key(), depth, "chance", maximizing_player)
-        if key in self._ttable:
+        key = self._tt_key_chance(state, depth, maximizing_player)
+        entry = self._ttable.get(key)
+        if entry and entry.depth >= depth:
             self._tt_hits += 1
-            return self._ttable[key][0]
+            self._tt_exact_hits += 1
+            return entry.value
 
         if depth == 0 or engine.is_terminal(state):
             val = self._evaluate(state, maximizing_player)
-            self._ttable[key] = (val, None)
-            self._tt_stores += 1
+            self._store_tt_entry(key, val, depth, self.Bound.EXACT, None)
             return val
 
         total = 0.0
@@ -478,9 +570,22 @@ class ExpectiminimaxAgent(Agent):
             )
             total += val
         avg = total / 6.0
-        self._ttable[key] = (avg, None)
-        self._tt_stores += 1
+        self._store_tt_entry(key, avg, depth, self.Bound.EXACT, None)
         return avg
+
+    def _store_tt_entry(
+        self,
+        key: tuple,
+        value: float,
+        depth: int,
+        bound: "ExpectiminimaxAgent.Bound",
+        best_move_sig: Optional[str],
+    ) -> None:
+        existing = self._ttable.get(key)
+        if existing and existing.depth > depth:
+            return
+        self._ttable[key] = self.TTEntry(value=value, depth=depth, bound=bound, best_move_sig=best_move_sig)
+        self._tt_stores += 1
 
 
 class OpeningExpectiAgent(Agent):

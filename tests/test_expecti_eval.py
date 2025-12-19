@@ -100,3 +100,26 @@ def test_killer_history_persist_across_moves():
     ordered = agent._order_moves(state, moves, ply=1)
 
     assert ordered[0] == favored_move
+
+
+def test_tt_key_includes_dice_for_decision():
+    state = build_state(red_map={1: (0, 0)}, blue_map={}, turn=Player.RED)
+    agent = ExpectiminimaxAgent(seed=7)
+
+    key_one = agent._tt_key_decision(state, dice=1, depth=2, maximizing_player=Player.RED)
+    key_two = agent._tt_key_decision(state, dice=2, depth=2, maximizing_player=Player.RED)
+
+    assert key_one != key_two
+    assert key_one[-1] == 1
+    assert key_two[-1] == 2
+
+
+def test_tt_key_distinguishes_node_type():
+    state = build_state(red_map={1: (0, 0)}, blue_map={}, turn=Player.RED)
+    agent = ExpectiminimaxAgent(seed=8)
+
+    decision_key = agent._tt_key_decision(state, dice=1, depth=3, maximizing_player=Player.RED)
+    chance_key = agent._tt_key_chance(state, depth=3, maximizing_player=Player.RED)
+
+    assert decision_key != chance_key
+    assert decision_key[0] != chance_key[0]
