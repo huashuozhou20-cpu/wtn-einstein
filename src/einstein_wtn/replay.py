@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import argparse
-from typing import Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from . import engine
 from .wtn_format import WTNGame, parse_wtn, rc_to_sq
@@ -24,10 +24,12 @@ def _format_board(board: List[List[int]]) -> str:
     return "\n".join(lines)
 
 
-def _layout_dict_to_list(layout: dict[int, tuple[int, int]], start_cells: Iterable[tuple[int, int]]) -> List[tuple[int, int]]:
+def _layout_dict_to_list(
+    layout: Dict[int, Tuple[int, int]], start_cells: Iterable[Tuple[int, int]]
+) -> List[Tuple[int, int]]:
     if len(layout) != 6:
         raise ValueError("layout must contain 6 pieces")
-    layout_list: List[tuple[int, int] | None] = [None] * 6
+    layout_list: List[Optional[Tuple[int, int]]] = [None] * 6
     for pid, coord in layout.items():
         if not 1 <= pid <= 6:
             raise ValueError(f"piece id out of range: {pid}")
@@ -41,7 +43,9 @@ def _layout_dict_to_list(layout: dict[int, tuple[int, int]], start_cells: Iterab
     return layout_list  # type: ignore[return-value]
 
 
-def replay_game(game: WTNGame, verbose: bool = False) -> Tuple[engine.GameState, Player | None]:
+def replay_game(
+    game: WTNGame, verbose: bool = False
+) -> Tuple[engine.GameState, Optional[Player]]:
     """Replay a parsed WTN game and return the final state and winner (if any)."""
 
     first_player = Player.RED
@@ -76,14 +80,16 @@ def replay_game(game: WTNGame, verbose: bool = False) -> Tuple[engine.GameState,
     return state, engine.winner(state)
 
 
-def replay_file(path: str, verbose: bool = False) -> Tuple[engine.GameState, Player | None]:
+def replay_file(
+    path: str, verbose: bool = False
+) -> Tuple[engine.GameState, Optional[Player]]:
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
     game = parse_wtn(text)
     return replay_game(game, verbose=verbose)
 
 
-def main(argv: List[str] | None = None) -> None:
+def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Replay a WTN game file")
     parser.add_argument("--file", required=True, help="Path to WTN game file")
     parser.add_argument("--verbose", action="store_true", help="Print each board during replay")
