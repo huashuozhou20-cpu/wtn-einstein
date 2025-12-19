@@ -6,12 +6,13 @@ import time
 import tkinter as tk
 from tkinter import filedialog
 from tkinter import messagebox
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 
 from . import engine
 from .agents import ExpectiminimaxAgent, HeuristicAgent, OpeningExpectiAgent, RandomAgent
 from .game_controller import GameController
 from .types import Move, Player
+from .wtn_format import rc_to_sq
 
 AGENT_CHOICES = [
     ("human", None),
@@ -45,6 +46,8 @@ class EinsteinTkApp:
 
         self.board_buttons: List[List[tk.Button]] = []
         self.selected: Optional[Tuple[int, int]] = None
+        self._default_bg: Optional[str] = None
+        self._highlighted: Set[Tuple[int, int]] = set()
 
         self.log_text = tk.Text(self.root, height=12, width=40, state=tk.DISABLED)
 
@@ -147,6 +150,8 @@ class EinsteinTkApp:
                 btn.grid(row=r, column=c)
                 row_buttons.append(btn)
             self.board_buttons.append(row_buttons)
+        if self.board_buttons and self.board_buttons[0]:
+            self._default_bg = self.board_buttons[0][0].cget("background")
 
         log_frame = tk.Frame(self.root)
         log_frame.grid(row=12, column=0, columnspan=2, pady=8, padx=10, sticky="we")
@@ -163,12 +168,14 @@ class EinsteinTkApp:
             messagebox.showerror("Error", f"Failed to start game: {exc}")
             return
         self.selected = None
+        self._clear_highlights()
         self._refresh_board()
         self._log("New game started")
 
     def _on_roll_dice(self) -> None:
         value = self.controller.roll_dice(random.Random())
         self._update_dice(value)
+        self._clear_selection_state()
 
     def _on_set_dice(self) -> None:
         raw = self.dice_entry.get().strip()
@@ -180,6 +187,8 @@ class EinsteinTkApp:
             self._update_dice(value)
         except Exception as exc:
             messagebox.showerror("Error", f"Invalid dice: {exc}")
+            return
+        self._clear_selection_state()
 
     def _on_ai_move(self) -> None:
         if self.controller.dice is None:
@@ -213,6 +222,12 @@ class EinsteinTkApp:
         self._log(f"Saved WTN to {path}")
 
     def _on_square_click(self, r: int, c: int) -> None:
+        if engine.is_terminal(self.controller.state):
+            self._log("Game is over; start a new game to keep playing.")
+            return
+        if self._is_ai_turn():
+            self._log("AI turn is active; wait for AI move or switch to advice mode.")
+            return
         if self.controller.dice is None:
             messagebox.showinfo("Dice required", "Roll or set dice before moving.")
             return
@@ -220,18 +235,30 @@ class EinsteinTkApp:
         turn = self.controller.state.turn
         if self.selected is None:
             if (turn is Player.RED and cell_value <= 0) or (turn is Player.BLUE and cell_value >= 0):
+                self._log("Select one of your own pieces to move.")
                 return
             agent = self.controller.red_agent if turn is Player.RED else self.controller.blue_agent
             if agent is not None and self.mode_var.get() == "play":
                 return
+            try:
+                destinations = self._legal_destinations_for_cell(r, c)
+            except ValueError as exc:
+                messagebox.showerror("Error", str(exc))
+                return
+            if not destinations:
+                self._log(f"This piece cannot move under dice={self.controller.dice}")
+                return
             self.selected = (r, c)
-            self._highlight_selection()
+            self._highlight_selection(destinations, origin=(r, c))
+            self._log(
+                "Targets: "
+                + ", ".join(sorted(rc_to_sq(dest[0], dest[1]) for dest in destinations))
+            )
             return
 
         move = self._find_move(self.selected, (r, c))
         if move is None:
-            self.selected = None
-            self._highlight_selection()
+            self._log("Illegal destination")
             return
         try:
             self.controller.apply_human_move(move)
@@ -240,12 +267,13 @@ class EinsteinTkApp:
             messagebox.showerror("Error", f"Illegal move: {exc}")
         finally:
             self.selected = None
-            self._highlight_selection()
+            self._clear_highlights()
 
     def _after_move(self, move: Move) -> None:
         self._log(self._format_move(move))
         self._refresh_board()
         self._update_turn()
+        self._clear_highlights()
         if engine.is_terminal(self.controller.state):
             win = engine.winner(self.controller.state)
             messagebox.showinfo("Game over", f"Winner: {win.name if win else 'Unknown'}")
@@ -275,13 +303,37 @@ class EinsteinTkApp:
                 return mv
         return None
 
-    def _highlight_selection(self) -> None:
+    def _clear_selection_state(self) -> None:
+        self.selected = None
+        self._clear_highlights()
+
+    def _clear_highlights(self) -> None:
         for r, row in enumerate(self.board_buttons):
             for c, btn in enumerate(row):
-                if self.selected == (r, c):
-                    btn.config(relief=tk.SUNKEN)
-                else:
-                    btn.config(relief=tk.RAISED)
+                base_bg = self._default_bg or btn.cget("background")
+                btn.config(relief=tk.RAISED, highlightthickness=0, background=base_bg)
+        self._highlighted.clear()
+
+    def _highlight_selection(
+        self, destinations: Set[Tuple[int, int]], origin: Tuple[int, int]
+    ) -> None:
+        self._clear_highlights()
+        for r, row in enumerate(self.board_buttons):
+            for c, btn in enumerate(row):
+                if (r, c) == origin:
+                    btn.config(
+                        relief=tk.SUNKEN,
+                        highlightthickness=3,
+                        highlightbackground="orange",
+                        highlightcolor="orange",
+                    )
+                elif (r, c) in destinations:
+                    btn.config(
+                        highlightthickness=3,
+                        highlightbackground="gold",
+                        highlightcolor="gold",
+                    )
+        self._highlighted = set(destinations)
 
     def _refresh_board(self) -> None:
         for r in range(engine.BOARD_SIZE):
@@ -314,6 +366,20 @@ class EinsteinTkApp:
         self.log_text.insert(tk.END, msg + "\n")
         self.log_text.config(state=tk.DISABLED)
         self.log_text.see(tk.END)
+
+    def _is_ai_turn(self) -> bool:
+        agent = self.controller.red_agent if self.controller.state.turn is Player.RED else self.controller.blue_agent
+        return agent is not None and self.mode_var.get() == "play"
+
+    def _legal_destinations_for_cell(self, r: int, c: int) -> Set[Tuple[int, int]]:
+        val = self.controller.state.board[r][c]
+        if val == 0:
+            return set()
+        piece_id = abs(val)
+        try:
+            return self.controller.legal_destinations_for_piece(piece_id)
+        except ValueError:
+            return set()
 
     def run(self) -> None:
         self.root.mainloop()

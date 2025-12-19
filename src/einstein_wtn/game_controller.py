@@ -6,7 +6,7 @@ underlying sequencing and validation can be tested without driving a GUI.
 from __future__ import annotations
 
 import random
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Set, Tuple
 
 from . import engine
 from .agents import HeuristicAgent
@@ -94,6 +94,13 @@ class GameController:
         if self.dice is None:
             raise ValueError("dice not set")
         return engine.generate_legal_moves(self.state, self.dice)
+
+    def legal_destinations_for_piece(self, piece_id: int) -> Set[Tuple[int, int]]:
+        """Return destination coordinates for the given piece under the current dice."""
+
+        if self.dice is None:
+            raise ValueError("dice not set")
+        return {mv.to_rc for mv in self.legal_moves() if mv.piece_id == piece_id}
 
     def apply_human_move(self, move: Move) -> GameState:
         if self.dice is None:
