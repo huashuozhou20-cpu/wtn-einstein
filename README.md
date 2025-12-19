@@ -46,9 +46,25 @@ python -m einstein_wtn.runner --mode game --red expecti --blue heuristic --seed 
     - `INIT <player> <layout_optional>`
     - `STATE <turn> <dice> <board_csv_25>`
     - `GO`
-  - Output: `MOVE <piece_id> <to_r> <to_c>` on stdout (one line per `GO`).
+- Output: `MOVE <piece_id> <to_r> <to_c>` on stdout (one line per `GO`).
   - Invalid input produces `ERROR <message>` and exits with a non-zero code.
 - The adapter enforces its own deadline (`--budget-ms` defaults to 50 ms) and falls back to the lightweight heuristic agent if the primary search encounters errors or proposes an illegal move. Human-readable logs are printed to stderr for turn/dice/move tracing.
+
+### 现场操作速查
+- 快速启动（短时钟、防守性预算）：
+  ```bash
+  scripts/run_bot_fast.sh
+  ```
+- 慢速启动（长时钟、更激进搜索）：
+  ```bash
+  scripts/run_bot_slow.sh
+  ```
+- 可选参数：
+  - `--agent` 切换主力（`random`/`heuristic`/`expecti`/`opening-expecti`）。
+  - `--budget-ms` 调整单步搜索预算（脚本默认 `60`/`180`，可通过环境变量 `BUDGET_MS` 覆盖）。
+  - `--quiet` 仅在 stderr 打印必要错误，stdout 始终只包含 `MOVE/ERROR` 协议行。
+  - `--save-wtn path` 开启落盘，崩溃时也能保留已走棋谱便于复盘。
+  - 所有参数可直接改脚本环境变量或追加到命令行，无需修改代码。
 
 ## WTN Notation (record & replay)
 - Coordinates map columns `A..E` and rows `1..5` to 0-based `(r, c)` (e.g., `A1` = `(0,0)`, `E5` = `(4,4)`).

@@ -68,4 +68,17 @@ def test_illegal_input_reports_error():
     code, out, err = _run_adapter_with_lines(lines, adapter)
     assert code == 1
     assert out.startswith("ERROR ")
+    assert "ERROR" in err
+
+
+def test_stdout_only_contains_protocol():
+    state, dice = _starter_state()
+    csv = _board_csv(state)
+    adapter = StdioAdapter(budget_ms=50, quiet=True)
+    lines = ["INIT RED", f"STATE RED {dice} {csv}", "GO"]
+    code, out, err = _run_adapter_with_lines(lines, adapter)
+    assert code == 0
+    out_lines = out.splitlines()
+    assert len(out_lines) == 1
+    assert out_lines[0].startswith("MOVE ") or out_lines[0].startswith("ERROR ")
     assert err == ""

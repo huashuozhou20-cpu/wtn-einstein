@@ -12,11 +12,12 @@ import argparse
 import sys
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from dataclasses import dataclass
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from . import engine
-from .agents import ExpectiminimaxAgent, HeuristicAgent
+from .agents import ExpectiminimaxAgent, HeuristicAgent, OpeningExpectiAgent, RandomAgent
 from .types import GameState, Move, Player
+from .wtn_format import WTNGame, dump_wtn
 
 
 class AdapterInputError(Exception):
@@ -85,6 +86,18 @@ def _state_from_tokens(turn_token: str, dice_token: str, board_csv: str) -> tupl
     return state, dice
 
 
+def _build_agent(name: str):
+    if name == "random":
+        return RandomAgent()
+    if name == "heuristic":
+        return HeuristicAgent()
+    if name == "expecti":
+        return ExpectiminimaxAgent()
+    if name in {"opening-expecti", "opening_expecti"}:
+        return OpeningExpectiAgent()
+    raise AdapterInputError(f"Unknown agent '{name}'")
+
+
 @dataclass
 class AdapterContext:
     player: Optional[Player] = None
@@ -105,6 +118,8 @@ class StdioAdapter:
         stdin=None,
         stdout=None,
         stderr=None,
+        quiet: bool = False,
+        save_wtn: Optional[str] = None,
     ) -> None:
         self.budget_ms = budget_ms
         self.agent = agent or ExpectiminimaxAgent()
@@ -113,12 +128,74 @@ class StdioAdapter:
         self.stdout = stdout or sys.stdout
         self.stderr = stderr or sys.stderr
         self.ctx = AdapterContext()
+        self.quiet = quiet
+        self.save_wtn_path = save_wtn
+        self._wtn_game: Optional[WTNGame] = None
+        self._wtn_enabled = save_wtn is not None
 
-    def _log(self, message: str) -> None:
+    def _log(self, message: str, *, force: bool = False) -> None:
+        if self.quiet and not force:
+            return
         print(message, file=self.stderr)
         self.stderr.flush()
 
+    def _extract_layouts_from_state(self, state: GameState) -> tuple[Dict[int, tuple[int, int]], Dict[int, tuple[int, int]]]:
+        red_layout: Dict[int, tuple[int, int]] = {}
+        blue_layout: Dict[int, tuple[int, int]] = {}
+        for r, row in enumerate(state.board):
+            for c, cell in enumerate(row):
+                if cell == 0:
+                    continue
+                pid = abs(cell)
+                target = red_layout if cell > 0 else blue_layout
+                if pid in target:
+                    raise ValueError(f"duplicate piece id {pid} detected")
+                target[pid] = (r, c)
+        if len(red_layout) != 6 or len(blue_layout) != 6:
+            raise ValueError("layout must contain 6 pieces per side to save WTN")
+        return red_layout, blue_layout
+
+    def _init_wtn_if_needed(self, state: GameState) -> None:
+        if not self._wtn_enabled or self._wtn_game is not None:
+            return
+        try:
+            red_layout, blue_layout = self._extract_layouts_from_state(state)
+        except ValueError as exc:
+            self._log(f"WTN capture failed: {exc}", force=True)
+            self._wtn_enabled = False
+            return
+        comments = [
+            f"# stdio adapter save (budget_ms={self.budget_ms}, agent={self.agent.__class__.__name__})",
+        ]
+        if self.ctx.layout:
+            comments.append(f"# layout_token={self.ctx.layout}")
+        self._wtn_game = WTNGame(comments=comments, red_layout=red_layout, blue_layout=blue_layout, moves=[])
+        self._persist_wtn()
+
+    def _persist_wtn(self) -> None:
+        if not self._wtn_enabled or self._wtn_game is None:
+            return
+        try:
+            with open(self.save_wtn_path, "w", encoding="utf-8") as handle:
+                handle.write(dump_wtn(self._wtn_game))
+                handle.flush()
+        except OSError as exc:  # pragma: no cover - defensive
+            self._log(f"WTN save failed: {exc}", force=True)
+            self._wtn_enabled = False
+
+    def _record_move_to_wtn(self, move: Move, dice: int, color: Player) -> None:
+        if not self._wtn_enabled:
+            return
+        if self._wtn_game is None:
+            self._log("WTN game not initialized; skipping save", force=True)
+            return
+        ply = len(self._wtn_game.moves) + 1
+        move_color = "R" if color == Player.RED else "B"
+        self._wtn_game.moves.append((ply, dice, move_color, move.piece_id, move.to_rc[0], move.to_rc[1]))
+        self._persist_wtn()
+
     def _emit_error_and_exit(self, message: str) -> int:
+        self._log(f"ERROR {message}", force=True)
         print(f"ERROR {message}", file=self.stdout)
         self.stdout.flush()
         return 1
@@ -177,6 +254,7 @@ class StdioAdapter:
         state, dice = _state_from_tokens(tokens[1], tokens[2], tokens[3])
         self.ctx.pending_state = state
         self.ctx.pending_dice = dice
+        self._init_wtn_if_needed(state)
 
     def _handle_go(self) -> Move:
         if self.ctx.pending_state is None or self.ctx.pending_dice is None:
@@ -184,8 +262,9 @@ class StdioAdapter:
         move = self._select_move(self.ctx.pending_state, self.ctx.pending_dice)
         self._log(
             f"turn={self.ctx.pending_state.turn.name} dice={self.ctx.pending_dice} "
-            f"move={move.piece_id}@{move.from_rc}->{move.to_rc}"
+            f"move={move.piece_id}@{move.from_rc}->{move.to_rc}",
         )
+        self._record_move_to_wtn(move, self.ctx.pending_dice, self.ctx.pending_state.turn)
         print(f"MOVE {move.piece_id} {move.to_rc[0]} {move.to_rc[1]}", file=self.stdout)
         self.stdout.flush()
         return move
@@ -219,9 +298,30 @@ def main(argv: Optional[Iterable[str]] = None) -> None:
         default=50,
         help="Deadline in milliseconds for primary agent search",
     )
+    parser.add_argument(
+        "--agent",
+        choices=["random", "heuristic", "expecti", "opening-expecti", "opening_expecti"],
+        default="expecti",
+        help="Primary agent to use for move selection",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress verbose stderr logs (protocol still goes to stdout)",
+    )
+    parser.add_argument(
+        "--save-wtn",
+        type=str,
+        help="Path to persist WTN moves as they are played",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
-    adapter = StdioAdapter(budget_ms=args.budget_ms)
+    adapter = StdioAdapter(
+        budget_ms=args.budget_ms,
+        agent=_build_agent(args.agent),
+        quiet=args.quiet,
+        save_wtn=args.save_wtn,
+    )
     sys.exit(adapter.run())
 
 
