@@ -196,9 +196,10 @@ def play_game(
                     f"{player.name} expecti stats: depth={stats.depth_reached} nodes={stats.nodes} "
                     f"tt_hit_rate={hit_rate:.3f} tt_exact={stats.tt_exact_hits} "
                     f"tt_lower={stats.tt_lower_hits} tt_upper={stats.tt_upper_hits} "
-                    f"tt_cutoffs={stats.tt_cutoffs} killer_hits={stats.killer_hits} "
-                    f"history_hits={stats.history_hits} killer_size={stats.killer_size} "
-                    f"history_size={stats.history_size} elapsed_ms={stats.elapsed_ms:.2f} "
+                    f"tt_cutoffs={stats.tt_cutoffs} tt_bestmove_hits={stats.tt_bestmove_hits} "
+                    f"killer_hits={stats.killer_hits} history_hits={stats.history_hits} pv_hits={stats.pv_hits} "
+                    f"killer_size={stats.killer_size} history_size={stats.history_size} "
+                    f"elapsed_ms={stats.elapsed_ms:.2f} "
                     f"remaining_ms={remaining_after*1000:.1f} budget_ms={budget_ms if budget_ms is not None else -1} "
                     f"flags={flag_str}"
                 )
