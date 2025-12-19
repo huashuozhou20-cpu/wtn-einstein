@@ -6,6 +6,7 @@ import time
 import tkinter as tk
 from tkinter import filedialog
 from tkinter import messagebox
+from tkinter import ttk
 from typing import List, Optional, Set, Tuple
 
 from . import engine
@@ -126,6 +127,7 @@ class EinsteinTkApp:
         )
 
         tk.Label(control_frame, text="Enter move (WTN):").grid(row=9, column=0, sticky="w")
+        self.move_text_entry = ttk.Entry(control_frame, width=18)
         self.move_text_entry.grid(row=9, column=1, sticky="w")
         self.move_text_entry.bind("<Return>", lambda _: self._on_text_move())
         tk.Button(control_frame, text="Apply", command=self._on_text_move).grid(
