@@ -28,11 +28,14 @@ class SearchStats:
     tt_upper_hits: int
     tt_cutoffs: int
     tt_bestmove_hits: int
+    tt_bestmove_stores: int
     killer_hits: int
     history_hits: int
     killer_size: int
     history_size: int
     pv_hits: int
+    pv_hits_root: int
+    pv_hits_decision: int
     elapsed_ms: float
 
 
@@ -167,10 +170,13 @@ class ExpectiminimaxAgent(Agent):
         self._tt_upper_hits = 0
         self._tt_cutoffs = 0
         self._tt_bestmove_hits = 0
+        self._tt_bestmove_stores = 0
         self._depth_reached = 0
         self._killer_hits = 0
         self._history_hits = 0
         self._pv_hits = 0
+        self._pv_hits_root = 0
+        self._pv_hits_decision = 0
         self._killer_depth_window = 12
 
     def choose_initial_layout(self, player: Player, time_budget_ms: Optional[int] = None) -> List[int]:
@@ -188,10 +194,13 @@ class ExpectiminimaxAgent(Agent):
         self._tt_upper_hits = 0
         self._tt_cutoffs = 0
         self._tt_bestmove_hits = 0
+        self._tt_bestmove_stores = 0
         self._depth_reached = 0
         self._killer_hits = 0
         self._history_hits = 0
         self._pv_hits = 0
+        self._pv_hits_root = 0
+        self._pv_hits_decision = 0
         start_time = time.monotonic()
 
         self._decay_memory()
@@ -213,11 +222,14 @@ class ExpectiminimaxAgent(Agent):
                 tt_upper_hits=0,
                 tt_cutoffs=0,
                 tt_bestmove_hits=0,
+                tt_bestmove_stores=0,
                 killer_hits=0,
                 history_hits=0,
                 killer_size=len(self.killer_moves),
                 history_size=len(self.history),
                 pv_hits=0,
+                pv_hits_root=0,
+                pv_hits_decision=0,
                 elapsed_ms=elapsed_ms,
             )
             return fallback
@@ -257,11 +269,14 @@ class ExpectiminimaxAgent(Agent):
             tt_upper_hits=self._tt_upper_hits,
             tt_cutoffs=self._tt_cutoffs,
             tt_bestmove_hits=self._tt_bestmove_hits,
+            tt_bestmove_stores=self._tt_bestmove_stores,
             killer_hits=self._killer_hits,
             history_hits=self._history_hits,
             killer_size=len(self.killer_moves),
             history_size=len(self.history),
             pv_hits=self._pv_hits,
+            pv_hits_root=self._pv_hits_root,
+            pv_hits_decision=self._pv_hits_decision,
             elapsed_ms=elapsed_ms,
         )
         return best_move
@@ -444,6 +459,10 @@ class ExpectiminimaxAgent(Agent):
                 self._history_hits += 1
             if is_pv:
                 self._pv_hits += 1
+                if ply == 0:
+                    self._pv_hits_root += 1
+                else:
+                    self._pv_hits_decision += 1
             capture = is_capture(mv)
             self_cap = is_self_capture(mv)
             gain = distance_gain(mv)
@@ -486,6 +505,24 @@ class ExpectiminimaxAgent(Agent):
                 self._tt_bestmove_hits += 1
                 return entry.best_move_sig
         return None
+
+    def _promote_tt_best_move_first(
+        self, moves: List[Move], entry: Optional["ExpectiminimaxAgent.TTEntry"]
+    ) -> List[Move]:
+        """Move any TT-suggested best move to the front of the move list if legal."""
+
+        if not moves:
+            return []
+        if entry is None or entry.best_move_sig is None:
+            return list(moves)
+
+        reordered = list(moves)
+        for idx, mv in enumerate(reordered):
+            if self._move_signature(mv) == entry.best_move_sig:
+                if idx != 0:
+                    reordered.insert(0, reordered.pop(idx))
+                return reordered
+        return reordered
 
     def _search_decision(
         self,
@@ -532,9 +569,11 @@ class ExpectiminimaxAgent(Agent):
         player = state.turn
         best_value = float("-inf") if player is maximizing_player else float("inf")
         best_move = None
+        cutoff_sig: Optional[str] = None
 
-        pv_sig = self._tt_best_move_sig(entry, moves)
-        ordered_moves = self._order_moves(state, moves, ply=ply, pv_sig=pv_sig)
+        promoted_moves = self._promote_tt_best_move_first(moves, entry)
+        pv_sig = self._tt_best_move_sig(entry, promoted_moves)
+        ordered_moves = self._order_moves(state, promoted_moves, ply=ply, pv_sig=pv_sig)
 
         for move in ordered_moves:
             self._time_check(deadline)
@@ -552,6 +591,7 @@ class ExpectiminimaxAgent(Agent):
                 if alpha >= beta:
                     self._record_killer(ply, move)
                     self._record_history(player, move, depth)
+                    cutoff_sig = self._move_signature(move)
                     break
             else:
                 if value < best_value or (value == best_value and best_move is None):
@@ -560,14 +600,19 @@ class ExpectiminimaxAgent(Agent):
                 if beta <= alpha:
                     self._record_killer(ply, move)
                     self._record_history(player, move, depth)
+                    cutoff_sig = self._move_signature(move)
                     break
         best_sig = self._move_signature(best_move) if best_move is not None else None
+        if cutoff_sig is not None and best_sig is None:
+            best_sig = cutoff_sig
         if best_value <= alpha_orig:
             bound = self.Bound.UPPER
         elif best_value >= beta_orig:
             bound = self.Bound.LOWER
         else:
             bound = self.Bound.EXACT
+        if bound is not self.Bound.EXACT and cutoff_sig is not None:
+            best_sig = cutoff_sig
         self._store_tt_entry(key, best_value, depth, bound, best_sig)
         return best_value, best_move
 
@@ -620,6 +665,8 @@ class ExpectiminimaxAgent(Agent):
             return
         self._ttable[key] = self.TTEntry(value=value, depth=depth, bound=bound, best_move_sig=best_move_sig)
         self._tt_stores += 1
+        if best_move_sig is not None:
+            self._tt_bestmove_stores += 1
 
 
 class OpeningExpectiAgent(Agent):

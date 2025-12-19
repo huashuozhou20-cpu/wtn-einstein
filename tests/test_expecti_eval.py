@@ -139,3 +139,17 @@ def test_tt_bestmove_prioritized():
     ordered = agent._order_moves(state, moves, ply=0, pv_sig=tt_pv_sig)
 
     assert ordered[0] == pv_move
+
+
+def test_tt_bestmove_promoted_in_child_decision():
+    state = build_state(red_map={2: (0, 0)}, blue_map={}, turn=Player.RED)
+    agent = ExpectiminimaxAgent(seed=10)
+    moves = engine.generate_legal_moves(state, dice=2)
+
+    pv_move = Move(piece_id=2, from_rc=(0, 0), to_rc=(1, 1))
+    pv_sig = agent._move_signature(pv_move)
+    key = agent._tt_key_decision(state, dice=2, depth=3, maximizing_player=Player.RED)
+    agent._ttable[key] = agent.TTEntry(value=0.0, depth=3, bound=agent.Bound.EXACT, best_move_sig=pv_sig)
+
+    promoted = agent._promote_tt_best_move_first(moves, agent._ttable[key])
+    assert promoted[0] == pv_move
