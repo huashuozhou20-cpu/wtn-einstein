@@ -18,6 +18,7 @@ from .agents import ExpectiminimaxAgent, HeuristicAgent, OpeningExpectiAgent, Ra
 from .opening import LayoutSearchAgent
 from .time_manager import TimeManagerConfig, compute_move_budget_ms
 from .types import GameState, Player
+from .wtn_format import WTNGame, dump_wtn
 
 AgentFactory = Callable[[Optional[int]], RandomAgent]
 
@@ -94,6 +95,7 @@ def play_game(
     collect_stats: bool,
     red_order: Optional[Sequence[int]],
     blue_order: Optional[Sequence[int]],
+    save_wtn_path: Optional[str] = None,
 ) -> GameSummary:
     rng = random.Random(seed)
     time_remaining = {
@@ -140,6 +142,27 @@ def play_game(
     layout_red = arrangement_to_layout(red_order_final, engine.START_RED_CELLS)
     layout_blue = arrangement_to_layout(blue_order_final, engine.START_BLUE_CELLS)
     state = engine.new_game(layout_red, layout_blue, first=first)
+    moves_log: List[Tuple[int, int, str, int, int, int]] = []
+
+    def _maybe_save_wtn(winner: Player, turns: int) -> None:
+        if save_wtn_path is None:
+            return
+        red_layout_dict = {pid: coord for pid, coord in enumerate(layout_red, start=1)}
+        blue_layout_dict = {pid: coord for pid, coord in enumerate(layout_blue, start=1)}
+        comments = [
+            f"# red_agent={red_agent.__class__.__name__}",
+            f"# blue_agent={blue_agent.__class__.__name__}",
+            f"# winner={winner.name}",
+            f"# turns={turns}",
+        ]
+        game = WTNGame(
+            comments=comments,
+            red_layout=red_layout_dict,
+            blue_layout=blue_layout_dict,
+            moves=moves_log,
+        )
+        with open(save_wtn_path, "w", encoding="utf-8") as f:
+            f.write(dump_wtn(game))
 
     turn_counter = 1
     while True:
@@ -168,6 +191,7 @@ def play_game(
         if time_remaining[player] < 0:
             if emit_moves or show_board:
                 print(f"{player.name} exceeded time. {player.opponent().name} wins by timeout.")
+            _maybe_save_wtn(player.opponent(), turn_counter)
             return GameSummary(
                 winner=player.opponent(),
                 turns=turn_counter,
@@ -177,6 +201,16 @@ def play_game(
 
         if emit_moves:
             print(f"Turn {turn_counter}: {player.name} rolled {dice} -> {move}")
+        moves_log.append(
+            (
+                turn_counter,
+                dice,
+                "R" if player is Player.RED else "B",
+                move.piece_id,
+                move.to_rc[0],
+                move.to_rc[1],
+            )
+        )
         state = engine.apply_move(state, move)
         turn_counter += 1
 
@@ -218,6 +252,7 @@ def play_game(
         if victor is not None:
             if show_board:
                 print(f"Winner: {victor.name}")
+            _maybe_save_wtn(victor, turn_counter - 1)
             return GameSummary(
                 winner=victor,
                 turns=turn_counter - 1,
@@ -281,6 +316,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--red-layout", type=str, default=None, help="Comma-separated permutation like 1,2,3,4,5,6")
     parser.add_argument("--blue-layout", type=str, default=None, help="Comma-separated permutation like 6,5,4,3,2,1")
     parser.add_argument("--stats", action="store_true", help="Print expecti search stats each move")
+    parser.add_argument("--save-wtn", type=str, default=None, help="Path to save WTN record for the game")
     return parser.parse_args(argv)
 
 
@@ -292,6 +328,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         blue_order = parse_layout_string(args.blue_layout) if args.blue_layout else None
     except ValueError as exc:
         print(f"Invalid layout: {exc}")
+        raise SystemExit(1)
+
+    if args.mode == "match" and args.save_wtn:
+        print("--save-wtn is only supported in game mode")
         raise SystemExit(1)
 
     red_agent = _build_agent(args.red, seed=args.seed)
@@ -311,6 +351,7 @@ def main(argv: Optional[List[str]] = None) -> None:
                 collect_stats=args.stats,
                 red_order=red_order,
                 blue_order=blue_order,
+                save_wtn_path=args.save_wtn,
             )
             print(f"Game winner: {summary.winner.name}")
         else:
