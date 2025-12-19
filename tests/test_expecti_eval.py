@@ -65,7 +65,7 @@ def test_killer_moves_prioritized():
     agent = ExpectiminimaxAgent(seed=4)
     moves = engine.generate_legal_moves(state, dice=1)
     killer_move = Move(piece_id=1, from_rc=(0, 0), to_rc=(1, 1))
-    agent.killer_moves[1] = [killer_move]
+    agent.killer_moves[1] = [agent._move_signature(killer_move)]
 
     ordered = agent._order_moves(state, moves, ply=1)
     assert ordered[0] == killer_move
@@ -77,8 +77,26 @@ def test_history_influences_order():
     moves = engine.generate_legal_moves(state, dice=1)
     target_move = Move(piece_id=1, from_rc=(0, 0), to_rc=(0, 1))
     other_move = Move(piece_id=1, from_rc=(0, 0), to_rc=(1, 0))
-    agent.history[(Player.RED, agent._move_signature(target_move))] = 25
-    agent.history[(Player.RED, agent._move_signature(other_move))] = 1
+    agent.history[(Player.RED.value, agent._move_signature(target_move))] = 25
+    agent.history[(Player.RED.value, agent._move_signature(other_move))] = 1
 
     ordered = agent._order_moves(state, moves, ply=1)
     assert ordered[0] == target_move
+
+
+def test_killer_history_persist_across_moves():
+    state = build_state(red_map={1: (0, 0)}, blue_map={}, turn=Player.RED)
+    agent = ExpectiminimaxAgent(seed=6)
+    moves = engine.generate_legal_moves(state, dice=1)
+    favored_move = Move(piece_id=1, from_rc=(0, 0), to_rc=(0, 1))
+    other_move = Move(piece_id=1, from_rc=(0, 0), to_rc=(1, 0))
+
+    # First search (or manual credit) seeds history that should persist with decay.
+    agent.choose_move(state, dice=1, time_budget_ms=20)
+    agent._record_history(Player.RED, favored_move, depth=3)
+
+    # Second move selection should still leverage the decayed history scores.
+    agent.choose_move(state, dice=1, time_budget_ms=20)
+    ordered = agent._order_moves(state, moves, ply=1)
+
+    assert ordered[0] == favored_move

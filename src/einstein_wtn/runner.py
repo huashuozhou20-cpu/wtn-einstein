@@ -195,7 +195,8 @@ def play_game(
                 print(
                     f"{player.name} expecti stats: depth={stats.depth_reached} nodes={stats.nodes} "
                     f"tt_hit_rate={hit_rate:.3f} killer_hits={stats.killer_hits} "
-                    f"history_hits={stats.history_hits} elapsed_ms={stats.elapsed_ms:.2f} "
+                    f"history_hits={stats.history_hits} killer_size={stats.killer_size} "
+                    f"history_size={stats.history_size} elapsed_ms={stats.elapsed_ms:.2f} "
                     f"remaining_ms={remaining_after*1000:.1f} budget_ms={budget_ms if budget_ms is not None else -1} "
                     f"flags={flag_str}"
                 )

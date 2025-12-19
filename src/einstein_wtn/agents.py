@@ -24,6 +24,8 @@ class SearchStats:
     tt_stores: int
     killer_hits: int
     history_hits: int
+    killer_size: int
+    history_size: int
     elapsed_ms: float
 
 
@@ -129,8 +131,8 @@ class ExpectiminimaxAgent(Agent):
         self._heuristic = HeuristicAgent(seed=seed)
         self._rng = random.Random(seed)
         self._ttable = {}
-        self.killer_moves: dict[int, list[Move]] = {}
-        self.history: dict[tuple[Player, str], int] = {}
+        self.killer_moves: dict[int, list[str]] = {}
+        self.history: dict[tuple[int, str], int] = {}
         self.last_stats: Optional[SearchStats] = None
         self._nodes = 0
         self._tt_hits = 0
@@ -138,6 +140,7 @@ class ExpectiminimaxAgent(Agent):
         self._depth_reached = 0
         self._killer_hits = 0
         self._history_hits = 0
+        self._killer_depth_window = 12
 
     def choose_initial_layout(self, player: Player, time_budget_ms: Optional[int] = None) -> List[int]:
         """Mirror the heuristic agent placement to prioritize depth toward the goal."""
@@ -154,8 +157,7 @@ class ExpectiminimaxAgent(Agent):
         self._history_hits = 0
         start_time = time.monotonic()
 
-        self.killer_moves = {}
-        self.history = {}
+        self._decay_memory()
 
         moves = engine.generate_legal_moves(state, dice)
         if not moves:
@@ -171,6 +173,8 @@ class ExpectiminimaxAgent(Agent):
                 tt_stores=0,
                 killer_hits=0,
                 history_hits=0,
+                killer_size=len(self.killer_moves),
+                history_size=len(self.history),
                 elapsed_ms=elapsed_ms,
             )
             return fallback
@@ -207,9 +211,31 @@ class ExpectiminimaxAgent(Agent):
             tt_stores=self._tt_stores,
             killer_hits=self._killer_hits,
             history_hits=self._history_hits,
+            killer_size=len(self.killer_moves),
+            history_size=len(self.history),
             elapsed_ms=elapsed_ms,
         )
         return best_move
+
+    def _decay_memory(self) -> None:
+        """Gently decay history scores and prune stale killer depths between moves."""
+
+        if self.history:
+            decayed: dict[tuple[int, str], int] = {}
+            for key, score in self.history.items():
+                player_key, sig = key
+                player_id = player_key.value if isinstance(player_key, Player) else int(player_key)
+                new_score = int(score * 0.8)
+                if new_score > 0:
+                    decayed[(player_id, sig)] = new_score
+            self.history = decayed
+
+        if self.killer_moves:
+            pruned: dict[int, list[str]] = {}
+            for depth, killers in self.killer_moves.items():
+                if depth <= self._killer_depth_window:
+                    pruned[depth] = killers[:2]
+            self.killer_moves = pruned
 
     def _time_check(self, deadline: Optional[float]) -> None:
         if deadline is not None and time.monotonic() > deadline:
@@ -285,10 +311,11 @@ class ExpectiminimaxAgent(Agent):
     def _record_killer(self, depth: int, move: Move) -> None:
         """Track killer moves per depth, keeping the two most recent."""
 
+        sig = self._move_signature(move)
         killers = self.killer_moves.setdefault(depth, [])
-        if move in killers:
+        if sig in killers:
             return
-        killers.insert(0, move)
+        killers.insert(0, sig)
         if len(killers) > 2:
             killers.pop()
 
@@ -297,7 +324,8 @@ class ExpectiminimaxAgent(Agent):
 
         sig = self._move_signature(move)
         bonus = max(1, depth) * max(1, depth)
-        self.history[(player, sig)] = self.history.get((player, sig), 0) + bonus
+        key = (player.value, sig)
+        self.history[key] = self.history.get(key, 0) + bonus
 
     def _order_moves(self, state, moves: List[Move], ply: Optional[int] = None) -> List[Move]:
         """Sort moves using win/killers/history before tactical heuristics."""
@@ -330,10 +358,11 @@ class ExpectiminimaxAgent(Agent):
         scored = []
         for idx, mv in enumerate(moves):
             win = win_move(mv)
-            killer_hit = mv in killers
+            sig = self._move_signature(mv)
+            killer_hit = sig in killers
             if killer_hit:
                 self._killer_hits += 1
-            history_score = self.history.get((player, self._move_signature(mv)), 0)
+            history_score = self.history.get((player.value, sig), 0)
             if history_score > 0:
                 self._history_hits += 1
             capture = is_capture(mv)
