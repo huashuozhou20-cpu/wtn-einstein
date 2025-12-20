@@ -9,7 +9,7 @@ import tkinter.font as tkfont
 from tkinter import filedialog
 from tkinter import messagebox
 from tkinter import ttk
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from . import engine
 from .agents import ExpectiminimaxAgent, HeuristicAgent, OpeningExpectiAgent, RandomAgent
@@ -17,6 +17,7 @@ from .game_controller import GameController
 from .i18n import available_langs, t
 from .types import Move, Player
 from .wtn_format import rc_to_sq
+from .wtn_layout import parse_layout_line
 
 AGENT_CHOICES = [
     ("human", None),
@@ -75,6 +76,20 @@ class EinsteinTkApp:
         self.red_layout_entry.insert(0, "1,2,3,4,5,6")
         self.blue_layout_entry = tk.Entry(self.root, width=24)
         self.blue_layout_entry.insert(0, "")
+        self.red_layout_text = tk.Text(self.root, height=2, width=28)
+        self.blue_layout_text = tk.Text(self.root, height=2, width=28)
+        self.edit_mode_var = tk.BooleanVar(value=False)
+        self.edit_side_var = tk.StringVar(value="R")
+        self.edit_piece_var = tk.StringVar(value="1")
+        self.auto_fill_red_var = tk.BooleanVar(value=True)
+        self.auto_fill_blue_var = tk.BooleanVar(value=True)
+        self._parsed_layouts: Dict[str, Optional[Dict[int, Tuple[int, int]]]] = {
+            "R": None,
+            "B": None,
+        }
+        self.edit_layouts: Dict[str, Dict[int, Tuple[int, int]]] = {"R": {}, "B": {}}
+        self.red_start_cells = set(engine.START_RED_CELLS)
+        self.blue_start_cells = set(engine.START_BLUE_CELLS)
 
         self.turn_var = tk.StringVar(value=t("turn_label", self.lang).format(turn="RED"))
 
@@ -227,9 +242,77 @@ class EinsteinTkApp:
         self.blue_layout_label.grid(row=3, column=0, sticky="w")
         self.blue_layout_entry.grid(in_=agents_frame, row=3, column=1, sticky="ew", padx=6, pady=2)
 
+        layout_frame = ttk.LabelFrame(control_frame, text=t("layout_group", self.lang), padding=8)
+        self.layout_frame = layout_frame
+        layout_frame.grid(row=4, column=0, sticky="ew", pady=4)
+        layout_frame.columnconfigure(0, weight=1)
+        self.red_layout_text_label = ttk.Label(layout_frame, text=t("layout_wtn_red", self.lang))
+        self.red_layout_text_label.grid(row=0, column=0, sticky="w")
+        self.red_layout_text.grid(in_=layout_frame, row=1, column=0, columnspan=2, sticky="ew", pady=2)
+        self.blue_layout_text_label = ttk.Label(layout_frame, text=t("layout_wtn_blue", self.lang))
+        self.blue_layout_text_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.blue_layout_text.grid(in_=layout_frame, row=3, column=0, columnspan=2, sticky="ew", pady=2)
+        layout_buttons = ttk.Frame(layout_frame)
+        layout_buttons.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        layout_buttons.columnconfigure((0, 1), weight=1)
+        self.apply_layout_button = ttk.Button(
+            layout_buttons, text=t("apply_layout", self.lang), command=self._on_apply_layouts
+        )
+        self.apply_layout_button.grid(row=0, column=0, padx=4, sticky="ew")
+        self.new_game_layout_button = ttk.Button(
+            layout_buttons, text=t("new_game_layout", self.lang), command=self._on_new_game_from_layout
+        )
+        self.new_game_layout_button.grid(row=0, column=1, padx=4, sticky="ew")
+        self.edit_toggle = ttk.Checkbutton(
+            layout_frame,
+            text=t("edit_layout_mode", self.lang),
+            variable=self.edit_mode_var,
+            command=self._on_toggle_edit_mode,
+        )
+        self.edit_toggle.grid(row=5, column=0, sticky="w", pady=(8, 0))
+        edit_tools = ttk.Frame(layout_frame)
+        edit_tools.grid(row=6, column=0, sticky="ew", pady=4)
+        edit_tools.columnconfigure(1, weight=1)
+        self.edit_side_label = ttk.Label(edit_tools, text=t("edit_side", self.lang))
+        self.edit_side_label.grid(row=0, column=0, sticky="w")
+        self.edit_red_radio = ttk.Radiobutton(
+            edit_tools, text=t("red_agent", self.lang), variable=self.edit_side_var, value="R"
+        )
+        self.edit_red_radio.grid(row=0, column=1, sticky="w")
+        self.edit_blue_radio = ttk.Radiobutton(
+            edit_tools, text=t("blue_agent", self.lang), variable=self.edit_side_var, value="B"
+        )
+        self.edit_blue_radio.grid(row=0, column=2, sticky="w", padx=(6, 0))
+        self.edit_piece_label = ttk.Label(edit_tools, text=t("edit_piece", self.lang))
+        self.edit_piece_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.edit_piece_combo = ttk.Combobox(
+            edit_tools,
+            textvariable=self.edit_piece_var,
+            values=[str(i) for i in range(1, 7)],
+            state="readonly",
+            width=6,
+        )
+        self.edit_piece_combo.grid(row=1, column=1, sticky="w", pady=(6, 0))
+        self.clear_piece_button = ttk.Button(edit_tools, text=t("clear_piece", self.lang), command=self._clear_selected_piece)
+        self.clear_piece_button.grid(row=1, column=2, padx=4, pady=(6, 0), sticky="ew")
+        self.clear_side_button = ttk.Button(edit_tools, text=t("clear_side", self.lang), command=self._clear_side)
+        self.clear_side_button.grid(row=2, column=2, padx=4, pady=4, sticky="ew")
+        self.mirror_button = ttk.Button(edit_tools, text=t("mirror_layout", self.lang), command=self._mirror_layout)
+        self.mirror_button.grid(row=2, column=1, padx=4, pady=4, sticky="ew")
+        fill_frame = ttk.Frame(layout_frame)
+        fill_frame.grid(row=7, column=0, sticky="w")
+        self.auto_fill_red_check = ttk.Checkbutton(
+            fill_frame, text=t("auto_fill_red", self.lang), variable=self.auto_fill_red_var
+        )
+        self.auto_fill_red_check.grid(row=0, column=0, sticky="w")
+        self.auto_fill_blue_check = ttk.Checkbutton(
+            fill_frame, text=t("auto_fill_blue", self.lang), variable=self.auto_fill_blue_var
+        )
+        self.auto_fill_blue_check.grid(row=0, column=1, sticky="w", padx=(12, 0))
+
         mode_frame = ttk.LabelFrame(control_frame, text=t("mode_group", self.lang), padding=8)
         self.mode_frame = mode_frame
-        mode_frame.grid(row=4, column=0, sticky="ew", pady=4)
+        mode_frame.grid(row=5, column=0, sticky="ew", pady=4)
         mode_frame.columnconfigure((0, 1), weight=1)
         self.mode_play_radio = ttk.Radiobutton(
             mode_frame, text=t("mode_play", self.lang), variable=self.mode_var, value="play"
@@ -246,7 +329,7 @@ class EinsteinTkApp:
 
         dice_frame = ttk.LabelFrame(control_frame, text=t("dice_group", self.lang), padding=8)
         self.dice_frame = dice_frame
-        dice_frame.grid(row=5, column=0, sticky="ew", pady=4)
+        dice_frame.grid(row=6, column=0, sticky="ew", pady=4)
         dice_frame.columnconfigure((0, 1, 2, 3), weight=1)
         self.roll_button = ttk.Button(dice_frame, text=t("roll_dice", self.lang), command=self._on_roll_dice)
         self.roll_button.grid(row=0, column=0, padx=6, pady=4, sticky="ew")
@@ -259,7 +342,7 @@ class EinsteinTkApp:
 
         input_frame = ttk.LabelFrame(control_frame, text=t("input_group", self.lang), padding=8)
         self.input_frame = input_frame
-        input_frame.grid(row=6, column=0, sticky="ew", pady=4)
+        input_frame.grid(row=7, column=0, sticky="ew", pady=4)
         input_frame.columnconfigure(0, weight=1)
         self.input_label = ttk.Label(input_frame, text=t("enter_move", self.lang))
         self.input_label.grid(row=0, column=0, sticky="w")
@@ -271,7 +354,7 @@ class EinsteinTkApp:
 
         ai_frame = ttk.LabelFrame(control_frame, text=t("ai_group", self.lang), padding=8)
         self.ai_frame = ai_frame
-        ai_frame.grid(row=7, column=0, sticky="ew", pady=4)
+        ai_frame.grid(row=8, column=0, sticky="ew", pady=4)
         ai_frame.columnconfigure(0, weight=1)
         self.ai_move_button = ttk.Button(ai_frame, text=t("ai_move", self.lang), command=self._on_ai_move)
         self.ai_move_button.grid(row=0, column=0, padx=6, pady=4, sticky="ew")
@@ -326,6 +409,7 @@ class EinsteinTkApp:
         for frame, label in [
             (self.game_frame, "game_group"),
             (self.agents_frame, "agents_group"),
+            (self.layout_frame, "layout_group"),
             (self.mode_frame, "mode_group"),
             (self.dice_frame, "dice_group"),
             (self.input_frame, "input_group"),
@@ -339,6 +423,20 @@ class EinsteinTkApp:
         self.blue_agent_label.configure(text=t("blue_agent", self.lang))
         self.red_layout_label.configure(text=t("layouts_red", self.lang))
         self.blue_layout_label.configure(text=t("layouts_blue", self.lang))
+        self.red_layout_text_label.configure(text=t("layout_wtn_red", self.lang))
+        self.blue_layout_text_label.configure(text=t("layout_wtn_blue", self.lang))
+        self.apply_layout_button.configure(text=t("apply_layout", self.lang))
+        self.new_game_layout_button.configure(text=t("new_game_layout", self.lang))
+        self.edit_toggle.configure(text=t("edit_layout_mode", self.lang))
+        self.edit_side_label.configure(text=t("edit_side", self.lang))
+        self.edit_red_radio.configure(text=t("red_agent", self.lang))
+        self.edit_blue_radio.configure(text=t("blue_agent", self.lang))
+        self.edit_piece_label.configure(text=t("edit_piece", self.lang))
+        self.clear_piece_button.configure(text=t("clear_piece", self.lang))
+        self.clear_side_button.configure(text=t("clear_side", self.lang))
+        self.mirror_button.configure(text=t("mirror_layout", self.lang))
+        self.auto_fill_red_check.configure(text=t("auto_fill_red", self.lang))
+        self.auto_fill_blue_check.configure(text=t("auto_fill_blue", self.lang))
         self.mode_play_radio.configure(text=t("mode_play", self.lang))
         self.mode_advise_radio.configure(text=t("mode_advise", self.lang))
         self.auto_apply_check.configure(text=t("auto_apply", self.lang))
@@ -441,6 +539,68 @@ class EinsteinTkApp:
         self._ai_suggestion_empty = True
         self._set_status_key("new_game_started", level="success")
         self._log(t("new_game_started", self.lang))
+
+    def _on_apply_layouts(self) -> None:
+        parsed: Dict[str, Optional[Dict[int, Tuple[int, int]]]] = {"R": None, "B": None}
+        for color, widget in (("R", self.red_layout_text), ("B", self.blue_layout_text)):
+            raw = widget.get("1.0", tk.END).strip()
+            if not raw:
+                continue
+            try:
+                parsed_color, mapping = parse_layout_line(raw)
+            except Exception as exc:
+                label = t("red_agent", self.lang) if color == "R" else t("blue_agent", self.lang)
+                self._set_status_text(
+                    t("layout_parse_error", self.lang).format(color=label, error=exc), level="error"
+                )
+                return
+            if parsed_color != color:
+                label = t("red_agent", self.lang) if color == "R" else t("blue_agent", self.lang)
+                self._set_status_text(
+                    t("layout_color_mismatch", self.lang).format(expected=label, found=parsed_color),
+                    level="error",
+                )
+                return
+            parsed[color] = mapping
+        self._parsed_layouts = parsed
+        self._set_status_key("layout_applied", level="success")
+
+    def _collect_layout_for_color(self, color: str) -> Optional[Dict[int, Tuple[int, int]]]:
+        source = self.edit_layouts[color]
+        if source:
+            if len(source) == 6:
+                return dict(source)
+            auto_fill = self.auto_fill_red_var.get() if color == "R" else self.auto_fill_blue_var.get()
+            if not auto_fill:
+                raise ValueError(
+                    t("layout_missing_pieces", self.lang).format(color=t("red_agent", self.lang) if color == "R" else t("blue_agent", self.lang))
+                )
+            return None
+        return self._parsed_layouts.get(color)
+
+    def _on_new_game_from_layout(self) -> None:
+        try:
+            red_agent = self._build_agent(self.agent_var_red.get())
+            blue_agent = self._build_agent(self.agent_var_blue.get())
+            red_layout = self._collect_layout_for_color("R")
+            blue_layout = self._collect_layout_for_color("B")
+            self.controller.new_game_custom(
+                red_layout=red_layout,
+                blue_layout=blue_layout,
+                red_agent=red_agent,
+                blue_agent=blue_agent,
+            )
+        except Exception as exc:
+            self._set_status_text(t("layout_parse_error", self.lang).format(color="", error=exc), level="error")
+            return
+        self.selected = None
+        self._clear_highlights()
+        self._refresh_board()
+        self.last_move_var.set(t("no_last_move", self.lang))
+        self.ai_suggestion_var.set(t("no_last_move", self.lang))
+        self._ai_suggestion_empty = True
+        self._set_status_key("layout_started", level="success")
+        self._log(t("layout_started", self.lang))
 
     def _on_roll_dice(self) -> None:
         value = self.controller.roll_dice(random.Random())
@@ -555,6 +715,9 @@ class EinsteinTkApp:
         self._set_status_key("copy_done", level="success")
 
     def _on_square_click(self, r: int, c: int) -> None:
+        if self.edit_mode_var.get():
+            self._on_edit_square_click(r, c)
+            return
         if engine.is_terminal(self.controller.state):
             self._log(t("game_over", self.lang))
             self._set_status_key("game_over", level="warning")
@@ -620,6 +783,80 @@ class EinsteinTkApp:
         finally:
             self.selected = None
             self._clear_highlights()
+
+    def _on_toggle_edit_mode(self) -> None:
+        self.selected = None
+        self._clear_highlights()
+        self._refresh_board()
+        if self.edit_mode_var.get():
+            self._set_status_key("layout_edit_on")
+        else:
+            self._set_status_key("status_ready")
+
+    def _on_edit_square_click(self, r: int, c: int) -> None:
+        side = self.edit_side_var.get()
+        try:
+            piece_id = int(self.edit_piece_var.get())
+        except ValueError:
+            self._set_status_text(t("layout_piece_invalid", self.lang), level="error")
+            return
+        allowed = self.red_start_cells if side == "R" else self.blue_start_cells
+        opponent = "B" if side == "R" else "R"
+        if (r, c) not in allowed:
+            self._set_status_text(t("layout_zone_error", self.lang), level="error")
+            return
+        for color, layout in self.edit_layouts.items():
+            for pid, coord in layout.items():
+                if coord == (r, c) and (color != side or pid != piece_id):
+                    self._set_status_text(
+                        t("layout_overlap_error", self.lang).format(square=rc_to_sq(r, c)), level="error"
+                    )
+                    return
+        self.edit_layouts[opponent] = {
+            pid: coord for pid, coord in self.edit_layouts[opponent].items() if coord != (r, c)
+        }
+        self.edit_layouts[side][piece_id] = (r, c)
+        self._set_status_text(
+            t("layout_piece_set", self.lang).format(color=side, piece=piece_id, square=rc_to_sq(r, c)),
+            level="success",
+        )
+        self._refresh_board()
+
+    def _clear_selected_piece(self) -> None:
+        side = self.edit_side_var.get()
+        try:
+            piece_id = int(self.edit_piece_var.get())
+        except ValueError:
+            self._set_status_text(t("layout_piece_invalid", self.lang), level="error")
+            return
+        if piece_id in self.edit_layouts[side]:
+            self.edit_layouts[side].pop(piece_id, None)
+            self._set_status_text(t("layout_piece_cleared", self.lang), level="info")
+            self._refresh_board()
+
+    def _clear_side(self) -> None:
+        side = self.edit_side_var.get()
+        self.edit_layouts[side].clear()
+        self._set_status_text(t("layout_side_cleared", self.lang), level="info")
+        self._refresh_board()
+
+    def _mirror_layout(self) -> None:
+        if not self.edit_layouts["R"]:
+            self._set_status_text(t("layout_mirror_missing", self.lang), level="warning")
+            return
+        mirrored: Dict[int, Tuple[int, int]] = {}
+        for pid, (r, c) in self.edit_layouts["R"].items():
+            target = (engine.BOARD_SIZE - 1 - r, engine.BOARD_SIZE - 1 - c)
+            if target not in self.blue_start_cells:
+                self._set_status_text(t("layout_zone_error", self.lang), level="error")
+                return
+            mirrored[pid] = target
+        if len(set(mirrored.values())) != len(mirrored):
+            self._set_status_text(t("layout_overlap_error", self.lang).format(square=""), level="error")
+            return
+        self.edit_layouts["B"] = mirrored
+        self._set_status_key("layout_mirrored", level="success")
+        self._refresh_board()
 
     def _after_move(self, move: Move) -> None:
         move_text = self._format_move(move)
@@ -687,6 +924,11 @@ class EinsteinTkApp:
         self._reapply_highlights()
 
     def _reapply_highlights(self) -> None:
+        if self.edit_mode_var.get():
+            for r in range(engine.BOARD_SIZE):
+                for c in range(engine.BOARD_SIZE):
+                    self._render_cell(r, c)
+            return
         for r in range(engine.BOARD_SIZE):
             for c in range(engine.BOARD_SIZE):
                 self._render_cell(r, c)
@@ -706,8 +948,32 @@ class EinsteinTkApp:
                     )
 
     def _render_cell(self, r: int, c: int) -> None:
-        val = self.controller.state.board[r][c]
         btn = self.board_buttons[r][c]
+        if self.edit_mode_var.get():
+            text = ""
+            bg = CELL_COLORS["empty"]
+            fg = "#444444"
+            if (r, c) in self.red_start_cells:
+                bg = CELL_COLORS["red"]
+            elif (r, c) in self.blue_start_cells:
+                bg = CELL_COLORS["blue"]
+            for color, layout in self.edit_layouts.items():
+                for pid, coord in layout.items():
+                    if coord == (r, c):
+                        text = f"{color}{pid}"
+                        fg = CELL_COLORS["red_border"] if color == "R" else CELL_COLORS["blue_border"]
+                        bg = CELL_COLORS["red"] if color == "R" else CELL_COLORS["blue"]
+                        break
+            btn.configure(
+                text=text,
+                background=bg,
+                activebackground=bg,
+                foreground=fg,
+                relief=tk.RAISED,
+                highlightthickness=0,
+            )
+            return
+        val = self.controller.state.board[r][c]
         text = ""
         bg = CELL_COLORS["empty"]
         fg = "#444444"
@@ -738,6 +1004,9 @@ class EinsteinTkApp:
         self._maybe_auto_step_ai()
 
     def _update_move_hints(self) -> None:
+        if self.edit_mode_var.get():
+            self.info_can_move_var.set(t("layout_edit_hint", self.lang))
+            return
         if self.controller.dice is None:
             self.info_can_move_var.set(t("info_can_move", self.lang) + ": -")
             return
