@@ -1130,6 +1130,16 @@ class EinsteinTkApp:
             self._set_status_key("status_ready")
         self._refresh_ui_state()
 
+    def _on_edit_side(self) -> None:
+        """Handle layout edit side changes without disrupting the UI."""
+        self.selected = None
+        self._clear_highlights()
+        self._refresh_board()
+        if self.edit_mode_var.get():
+            self._set_status_key("layout_edit_on")
+        else:
+            self._set_status_key("status_ready")
+
     def _on_edit_square_click(self, r: int, c: int) -> None:
         side = self.edit_side_var.get()
         try:
