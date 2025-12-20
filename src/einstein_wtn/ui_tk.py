@@ -125,6 +125,7 @@ class EinsteinTkApp:
         self._set_status_key(initial_status_key, level=initial_level)
         self._refresh_board()
         self._refresh_ui_state()
+        self._stabilize_layout()
         contract_errors = self._run_ui_contract_check()
         if contract_errors:
             for err in contract_errors:
@@ -529,6 +530,23 @@ class EinsteinTkApp:
             errors.append("board_frame size unavailable")
 
         return errors
+
+    def _stabilize_layout(self, attempts: int = 50, sleep: float = 0.0) -> None:
+        """Pump the event loop until the board has usable space."""
+
+        for _ in range(attempts):
+            self.root.update_idletasks()
+            self.root.update()
+            try:
+                width = self.board_frame.winfo_width()
+                height = self.board_frame.winfo_height()
+            except Exception:
+                width = height = 0
+            if width >= 300 and height >= 300:
+                break
+            if sleep:
+                time.sleep(sleep)
+        self._request_board_resize(delay=0)
 
     def _on_board_area_resize(self, event) -> None:
         self._request_board_resize(width=max(event.width, 0), height=max(event.height, 0))
@@ -1429,9 +1447,16 @@ def main() -> None:
 
     app = EinsteinTkApp(lang=args.lang)
     if args.self_check:
-        for _ in range(3):
+        for _ in range(50):
             app.root.update_idletasks()
             app.root.update()
+            try:
+                if app.board_frame.winfo_width() >= 300 and app.board_frame.winfo_height() >= 300:
+                    break
+            except Exception:
+                pass
+            time.sleep(0.01)
+        app._request_board_resize(delay=0)
         errors = app._run_ui_contract_check()
         if errors:
             print("UI_SELF_CHECK_FAIL")
