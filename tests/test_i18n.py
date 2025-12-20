@@ -8,6 +8,9 @@ def test_translations_cover_keys():
         "move_log",
         "dice_group",
         "status_ready",
+        "phase_label",
+        "next_step_label",
+        "help_button",
     ]
     for lang in i18n.available_langs():
         for key in required:
