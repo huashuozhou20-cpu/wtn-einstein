@@ -115,7 +115,7 @@ class EinsteinTkApp:
         self.controller = self._build_controller()
         self._layout_widgets(piece_font)
         self.root.update_idletasks()
-        self._apply_board_size(self.board_container.winfo_width(), self.board_container.winfo_height())
+        self._request_board_resize(delay=0)
         self._center_window()
         initial_status_key = "status_ready" if self.has_cjk_font else "missing_cjk_fonts"
         initial_level = "info" if self.has_cjk_font else "warning"
@@ -204,8 +204,8 @@ class EinsteinTkApp:
 
         main_frame = ttk.Frame(content_frame, padding=(12, 6, 12, 6))
         main_frame.grid(row=1, column=0, sticky="nsew")
-        main_frame.columnconfigure(0, weight=3)
-        main_frame.columnconfigure(1, weight=0)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=0, minsize=420)
         main_frame.rowconfigure(0, weight=1)
 
         board_outer = ttk.Frame(main_frame)
@@ -242,10 +242,9 @@ class EinsteinTkApp:
                 row_buttons.append(btn)
             self.board_buttons.append(row_buttons)
 
-        main_frame.columnconfigure(1, weight=0, minsize=400)
         control_frame = ttk.Frame(main_frame, padding=(0, 0, 0, 0))
-        control_frame.grid(row=0, column=1, sticky="n")
-        control_frame.columnconfigure(0, weight=1, minsize=380)
+        control_frame.grid(row=0, column=1, sticky="ns", padx=(12, 0), pady=(0, 8))
+        control_frame.columnconfigure(0, weight=1, minsize=420)
         control_frame.grid_propagate(False)
         control_frame.configure(width=420)
 
@@ -470,18 +469,32 @@ class EinsteinTkApp:
         self.log_text.grid(in_=log_text_frame, row=0, column=0, sticky="nsew")
 
     def _on_board_container_resize(self, event) -> None:
+        self._request_board_resize(width=max(event.width, 0), height=max(event.height, 0))
+
+    def _request_board_resize(self, width: Optional[int] = None, height: Optional[int] = None, delay: int = 50) -> None:
         if self._resize_after:
             self.root.after_cancel(self._resize_after)
-        width = max(event.width, 0)
-        height = max(event.height, 0)
-        self._resize_after = self.root.after(50, lambda: self._apply_board_size(width, height))
+
+        def redraw() -> None:
+            current_width = width if width is not None else self.board_container.winfo_width()
+            current_height = height if height is not None else self.board_container.winfo_height()
+            self._apply_board_size(current_width, current_height)
+
+        self._resize_after = self.root.after(delay, redraw)
 
     def _apply_board_size(self, width: int, height: int) -> None:
         self._resize_after = None
+        if width < 200 or height < 200:
+            self._request_board_resize(delay=50)
+            return
         padding = 12
         avail_w = max(width - padding, engine.BOARD_SIZE)
         avail_h = max(height - padding, engine.BOARD_SIZE)
-        cell = max(24, min(avail_w, avail_h) // engine.BOARD_SIZE)
+        raw_cell = min(avail_w, avail_h) // engine.BOARD_SIZE
+        if raw_cell < 60 and min(avail_w, avail_h) >= 60 * engine.BOARD_SIZE:
+            cell = 60
+        else:
+            cell = max(24, raw_cell)
         board_size = cell * engine.BOARD_SIZE
         self.board_frame.place_configure(width=board_size, height=board_size)
         self.board_frame.update_idletasks()
