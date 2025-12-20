@@ -52,6 +52,19 @@ Use the expectiminimax agent and specify layouts explicitly (comma-separated per
 - Layout controls: optional comma-separated layout orders (e.g., `1,2,3,4,5,6`) let you pin openings; otherwise agents pick their own.
 - WTN saving: **Save WTN** writes the current game (layouts + moves) to a timestamped `.wtn.txt` file, embedding the chosen agent names in comments. A “Copy last move” button copies the most recent move string for sharing.
 
+### Custom opening layout
+- Paste-ready: in **Layout** you can enter a WTN line for each side such as `R:A1-1;B1-2;C1-3;A2-4;B2-5;A3-6` and `B:E5-1;D5-2;C5-3;E4-4;D4-5;E3-6`, then click **Apply layout line** followed by **New game (use layout)**.
+- Edit mode: toggle **Edit layout** to place pieces by clicking start-zone cells. Choose side (Red/Blue) and piece id, then click a highlighted start cell to place/move it; mirror the Red plan to Blue with one click. Enable “Auto-fill” if you want missing pieces auto-assigned by the default logic when starting the game.
+- Start zones:
+  - Red: `A1,B1,C1,A2,B2,A3`
+  - Blue: `E5,D5,C5,E4,D4,E3`
+
+### WSL/Ubuntu 中文字体
+- 若在 WSL/Ubuntu 下中文界面出现方框或默认英文字体，可安装 Noto 字体集：
+  ```bash
+  sudo apt install fonts-noto-cjk fonts-noto-cjk-extra
+  ```
+
 ## Competition Stdio Adapter
 - A line-oriented adapter suitable for on-site events is available via:
   ```bash

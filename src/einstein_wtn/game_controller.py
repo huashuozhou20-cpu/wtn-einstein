@@ -34,6 +34,8 @@ class GameController:
         self._blue_layout_order: List[int] = []
         self.red_layout_coords: List[Tuple[int, int]] = []
         self.blue_layout_coords: List[Tuple[int, int]] = []
+        self._custom_layout_red: Optional[List[Tuple[int, int]]] = None
+        self._custom_layout_blue: Optional[List[Tuple[int, int]]] = None
         self.state: GameState
         self.dice: Optional[int] = None
         self.history: List[Tuple[int, Move]]
@@ -54,6 +56,8 @@ class GameController:
         self._blue_layout_order = self._select_order(
             blue_layout, self.blue_agent, default_order=[1, 2, 3, 4, 5, 6]
         )
+        self._custom_layout_red = None
+        self._custom_layout_blue = None
         self.red_layout_coords = arrangement_to_layout(
             self._red_layout_order, engine.START_RED_CELLS
         )
@@ -79,6 +83,87 @@ class GameController:
 
     def _agent_player(self, agent) -> Player:
         return Player.RED if agent is self.red_agent else Player.BLUE
+
+    def _coords_from_mapping(
+        self, layout: Optional[dict[int, Tuple[int, int]]], allowed: Sequence[Tuple[int, int]]
+    ) -> Optional[List[Tuple[int, int]]]:
+        if layout is None:
+            return None
+        coords: List[Optional[Tuple[int, int]]] = [None] * 6
+        allowed_set = set(allowed)
+        used_cells = set()
+        for pid, coord in layout.items():
+            if not 1 <= pid <= 6:
+                raise ValueError("Layout must list each id 1..6 exactly once")
+            if coord not in allowed_set:
+                raise ValueError("Layout cell not in start zone")
+            if coord in used_cells:
+                raise ValueError("Layout cells must be unique")
+            coords[pid - 1] = coord
+            used_cells.add(coord)
+        if any(cell is None for cell in coords):
+            raise ValueError("Layout must list each id 1..6 exactly once")
+        return coords  # type: ignore[return-value]
+
+    def set_custom_layout(
+        self,
+        red_layout: Optional[dict[int, Tuple[int, int]]] = None,
+        blue_layout: Optional[dict[int, Tuple[int, int]]] = None,
+    ) -> None:
+        """Store custom layouts (piece_id -> (r, c)) to be used by ``new_game_custom``."""
+
+        self._custom_layout_red = self._coords_from_mapping(
+            red_layout, engine.START_RED_CELLS
+        )
+        self._custom_layout_blue = self._coords_from_mapping(
+            blue_layout, engine.START_BLUE_CELLS
+        )
+
+    def _resolve_layout_coords(
+        self,
+        provided: Optional[List[Tuple[int, int]]],
+        allowed: Sequence[Tuple[int, int]],
+        agent,
+        default_order: Sequence[int],
+    ) -> List[Tuple[int, int]]:
+        if provided is not None:
+            return list(provided)
+        order = self._select_order(None, agent, default_order=default_order)
+        return arrangement_to_layout(order, allowed)
+
+    def new_game_custom(
+        self,
+        red_layout: Optional[dict[int, Tuple[int, int]]],
+        blue_layout: Optional[dict[int, Tuple[int, int]]],
+        red_agent,
+        blue_agent,
+        seed: Optional[int] = None,
+    ) -> None:
+        """Start a game using provided custom layouts when available."""
+
+        if seed is not None:
+            random.seed(seed)
+        self.red_agent = red_agent
+        self.blue_agent = blue_agent
+        self._custom_layout_red = self._coords_from_mapping(
+            red_layout, engine.START_RED_CELLS
+        )
+        self._custom_layout_blue = self._coords_from_mapping(
+            blue_layout, engine.START_BLUE_CELLS
+        )
+        self._red_layout_order = [1, 2, 3, 4, 5, 6]
+        self._blue_layout_order = [1, 2, 3, 4, 5, 6]
+        self.red_layout_coords = self._resolve_layout_coords(
+            self._custom_layout_red, engine.START_RED_CELLS, self.red_agent, self._red_layout_order
+        )
+        self.blue_layout_coords = self._resolve_layout_coords(
+            self._custom_layout_blue, engine.START_BLUE_CELLS, self.blue_agent, self._blue_layout_order
+        )
+        self.state = engine.new_game(
+            self.red_layout_coords, self.blue_layout_coords, first=self._initial_turn
+        )
+        self.history = []
+        self.dice = None
 
     def set_dice(self, value: int) -> None:
         if not 1 <= value <= 6:

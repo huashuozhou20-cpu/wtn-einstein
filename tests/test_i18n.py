@@ -21,3 +21,9 @@ def test_missing_key_raises():
     except ValueError:
         return
     assert False, "Expected ValueError for missing key"
+
+
+def test_language_key_sets_match():
+    zh_keys = set(i18n.LANG_ZH.keys())
+    en_keys = set(i18n.LANG_EN.keys())
+    assert zh_keys == en_keys
