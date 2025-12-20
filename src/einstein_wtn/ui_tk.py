@@ -5,6 +5,7 @@ import argparse
 import random
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import filedialog
 from tkinter import messagebox
 from tkinter import ttk
@@ -35,6 +36,15 @@ CELL_COLORS = {
     "legal": "#81c784",
 }
 
+FONT_CANDIDATES = [
+    "Noto Sans CJK SC",
+    "Noto Sans CJK",
+    "WenQuanYi Micro Hei",
+    "Microsoft YaHei",
+    "DejaVu Sans",
+]
+CJK_FONT_CANDIDATES = FONT_CANDIDATES[:-1]
+
 
 class EinsteinTkApp:
     """Tkinter UI supporting play and move advising with bilingual text."""
@@ -44,10 +54,8 @@ class EinsteinTkApp:
 
         self.root = tk.Tk()
         self.root.title(t("window_title", self.lang))
-
-        default_font = ("DejaVu Sans", 11)
-        piece_font = ("DejaVu Sans", 16, "bold")
-        self.root.option_add("*Font", default_font)
+        font_family, has_cjk_font, base_size = self._configure_fonts()
+        piece_font = (font_family, base_size + 5, "bold")
 
         self.agent_var_red = tk.StringVar(value="human")
         self.agent_var_blue = tk.StringVar(value="expecti")
@@ -55,7 +63,11 @@ class EinsteinTkApp:
         self.lang_var = tk.StringVar(value=self.lang)
         self.auto_apply_var = tk.BooleanVar(value=True)
         self.dice_var = tk.StringVar(value="-")
-        self.status_var = tk.StringVar(value=t("status_ready", self.lang))
+        self.status_var = tk.StringVar(
+            value=t("status_ready", self.lang)
+            if has_cjk_font
+            else t("missing_cjk_fonts", self.lang)
+        )
         self.last_move_var = tk.StringVar(value=t("no_last_move", self.lang))
         self.ai_suggestion_var = tk.StringVar(value=t("no_last_move", self.lang))
         self.info_can_move_var = tk.StringVar(value="-")
@@ -72,11 +84,30 @@ class EinsteinTkApp:
         self._highlighted: Set[Tuple[int, int]] = set()
 
         self.log_text = tk.Text(self.root, height=12, width=48, state=tk.DISABLED)
-        self.log_text.configure(font=("DejaVu Sans Mono", 10))
+        self.log_text.configure(font=(font_family, base_size - 1))
 
         self.controller = self._build_controller()
         self._layout_widgets(piece_font)
         self._refresh_board()
+
+    def _configure_fonts(self) -> Tuple[str, bool, int]:
+        available_fonts = set(tkfont.families(self.root))
+        selected_family = next(
+            (family for family in FONT_CANDIDATES if family in available_fonts),
+            tkfont.nametofont("TkDefaultFont").actual().get("family", "TkDefaultFont"),
+        )
+        has_cjk_font = selected_family in CJK_FONT_CANDIDATES
+
+        default_font = tkfont.nametofont("TkDefaultFont")
+        base_size = default_font.actual().get("size", 11)
+        tkfont.nametofont("TkDefaultFont").configure(family=selected_family, size=base_size)
+        tkfont.nametofont("TkTextFont").configure(family=selected_family, size=base_size)
+        tkfont.nametofont("TkFixedFont").configure(family=selected_family, size=base_size)
+
+        style = ttk.Style(self.root)
+        style.configure(".", font=(selected_family, base_size))
+
+        return selected_family, has_cjk_font, base_size
 
     def _build_controller(self) -> GameController:
         red_agent = self._build_agent(self.agent_var_red.get())
