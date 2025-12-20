@@ -320,8 +320,8 @@ class EinsteinTkApp:
         )
         self.auto_fill_blue_check.grid(row=0, column=1, sticky="w", padx=(12, 0))
 
-        play_frame = ttk.LabelFrame(control_frame, text=t("mode_group", self.lang), padding=10)
-        self.mode_frame = play_frame
+        play_frame = ttk.LabelFrame(control_frame, text=t("play_agents_group", self.lang), padding=10)
+        self.play_frame = play_frame
         play_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
         play_frame.columnconfigure(1, weight=1)
         self.mode_play_radio = ttk.Radiobutton(
@@ -360,19 +360,18 @@ class EinsteinTkApp:
         dice_frame = ttk.LabelFrame(control_frame, text=t("dice_group", self.lang), padding=10)
         self.dice_frame = dice_frame
         dice_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
-        dice_frame.columnconfigure(2, weight=1)
+        dice_frame.columnconfigure(1, weight=1)
         self.roll_button = ttk.Button(dice_frame, text=t("roll_dice", self.lang), command=self._on_roll_dice)
         self.roll_button.grid(row=0, column=0, padx=(0, 6), pady=4, sticky="ew")
-        self.set_dice_label = ttk.Label(dice_frame, text=t("set_dice", self.lang))
-        self.set_dice_label.grid(row=0, column=1, sticky="e", padx=(0, 6))
         self.dice_entry = ttk.Entry(dice_frame, width=8)
-        self.dice_entry.grid(row=0, column=2, sticky="ew", pady=4)
+        self.dice_entry.grid(row=0, column=1, sticky="ew", pady=4)
         self.apply_dice_button = ttk.Button(dice_frame, text=t("apply_dice", self.lang), command=self._on_set_dice)
-        self.apply_dice_button.grid(row=0, column=3, padx=(6, 0), pady=4, sticky="ew")
+        self.apply_dice_button.grid(row=0, column=2, padx=(6, 0), pady=4, sticky="ew")
 
-        action_frame = ttk.LabelFrame(control_frame, text=t("ai_group", self.lang), padding=10)
-        self.ai_frame = action_frame
+        action_frame = ttk.LabelFrame(control_frame, text=t("move_group", self.lang), padding=10)
+        self.move_frame = action_frame
         action_frame.grid(row=3, column=0, sticky="nsew")
+        action_frame.columnconfigure(0, weight=1)
         action_frame.columnconfigure(1, weight=1)
 
         input_row = ttk.Frame(action_frame)
@@ -462,9 +461,9 @@ class EinsteinTkApp:
         self.help_button.configure(text=t("help_button", self.lang))
         for frame, label in [
             (self.game_frame, "game_group"),
-            (self.mode_frame, "mode_group"),
+            (self.play_frame, "play_agents_group"),
             (self.dice_frame, "dice_group"),
-            (self.ai_frame, "ai_group"),
+            (self.move_frame, "move_group"),
             (self.log_frame, "move_log"),
         ]:
             frame.configure(text=t(label, self.lang))
@@ -492,7 +491,6 @@ class EinsteinTkApp:
         self.mode_advise_radio.configure(text=t("mode_advise", self.lang))
         self.auto_apply_check.configure(text=t("auto_apply", self.lang))
         self.roll_button.configure(text=t("roll_dice", self.lang))
-        self.set_dice_label.configure(text=t("set_dice", self.lang))
         self.apply_dice_button.configure(text=t("apply_dice", self.lang))
         self.input_label.configure(text=t("enter_move", self.lang))
         self.apply_text_button.configure(text=t("apply", self.lang))
@@ -628,23 +626,26 @@ class EinsteinTkApp:
     def _refresh_ui_state(self) -> None:
         phase = self._update_phase()
         self._board_block_reason = None
-        dice_enabled = phase != PHASE_GAME_OVER
+        dice_enabled = phase == PHASE_NEED_DICE
         move_enabled = phase == PHASE_NEED_MOVE
         ai_enabled = False
         board_enabled = move_enabled
         reason_key: Optional[str] = None
+        dice_reason: Optional[str] = None
+        move_reason: Optional[str] = None
         hint_level = "warning"
 
         if phase == PHASE_SETUP:
             board_enabled = self.edit_mode_var.get()
+            move_reason = "status_reason_need_start"
+            dice_reason = "status_reason_need_start"
             if self.edit_mode_var.get():
                 reason_key = "status_reason_layout_edit"
                 hint_level = "info"
-            else:
-                reason_key = "status_reason_need_start"
         elif phase == PHASE_NEED_DICE:
-            reason_key = "status_reason_need_dice"
+            move_reason = "status_reason_need_dice"
         elif phase == PHASE_NEED_MOVE:
+            dice_reason = "status_reason_need_move"
             agent = self.controller.red_agent if self.controller.state.turn is Player.RED else self.controller.blue_agent
             ai_enabled = self.mode_var.get() == "advise" or agent is not None
             if self._is_ai_turn():
@@ -655,10 +656,13 @@ class EinsteinTkApp:
             dice_enabled = False
             move_enabled = False
             reason_key = "status_reason_game_over"
+            dice_reason = reason_key
+            move_reason = reason_key
 
         if phase == PHASE_NEED_MOVE:
             hint_level = "info"
-        self._board_block_reason = None if board_enabled or self.edit_mode_var.get() else reason_key
+        block_reason = reason_key or move_reason or dice_reason
+        self._board_block_reason = None if board_enabled or self.edit_mode_var.get() else block_reason
 
         for widget in [self.roll_button, self.apply_dice_button, self.dice_entry]:
             self._set_widget_state(widget, dice_enabled)
@@ -671,7 +675,7 @@ class EinsteinTkApp:
             for btn in row:
                 self._set_widget_state(btn, board_enabled or self.edit_mode_var.get())
 
-        self._maybe_hint(reason_key, level=hint_level)
+        self._maybe_hint(block_reason, level=hint_level)
 
     def _on_agents_changed(self) -> None:
         self._log(t("agents_changed", self.lang))
@@ -794,13 +798,6 @@ class EinsteinTkApp:
                 self._maybe_hint(reason, level="error")
             else:
                 self._maybe_hint(reason)
-            return
-        self._refresh_ui_state()
-        if self._phase != PHASE_NEED_DICE:
-            reason = "status_reason_need_start" if self._phase == PHASE_SETUP else "status_reason_need_move"
-            if self._phase == PHASE_GAME_OVER:
-                reason = "status_reason_game_over"
-            self._maybe_hint(reason)
             return
         try:
             value = int(raw)
