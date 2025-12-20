@@ -17,7 +17,7 @@ from . import engine
 from .agents import ExpectiminimaxAgent, HeuristicAgent, OpeningExpectiAgent, RandomAgent
 from .game_controller import GameController
 from .i18n import available_langs, t
-from .ui_contract import REQUIRED_MAPPED_WIDGETS, REQUIRED_WIDGET_ATTRS
+from .ui_contract import CONTROL_CHILD_WIDGETS, REQUIRED_MAPPED_WIDGETS, REQUIRED_WIDGET_ATTRS
 from .types import Move, Player
 from .wtn_format import rc_to_sq
 from .wtn_layout import parse_layout_line
@@ -276,9 +276,10 @@ class EinsteinTkApp:
         self.apply_dice_button.grid(row=0, column=2, padx=(6, 0), pady=4, sticky="ew")
         self.btn_apply_dice = self.apply_dice_button
 
+        # Always-visible move/action controls (must stay mapped)
         action_frame = ttk.LabelFrame(control_frame, text=t("move_group", self.lang), padding=10)
         self.move_frame = action_frame
-        action_frame.grid(row=2, column=0, sticky="nsew")
+        action_frame.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
         action_frame.columnconfigure(0, weight=1)
         action_frame.columnconfigure(1, weight=1)
         control_frame.rowconfigure(2, weight=1)
@@ -499,7 +500,7 @@ class EinsteinTkApp:
         scrollbar.config(command=self.log_text.yview)
         self.log_text.grid(in_=log_text_frame, row=0, column=0, sticky="nsew")
 
-    def _run_ui_contract_check(self) -> List[str]:
+    def _run_ui_contract_check(self, stabilized_size: Optional[Tuple[int, int]] = None) -> List[str]:
         errors: List[str] = []
         for attr in REQUIRED_WIDGET_ATTRS:
             if not hasattr(self, attr):
@@ -517,17 +518,48 @@ class EinsteinTkApp:
             if mapped != 1:
                 errors.append(f"widget '{attr}' is not mapped")
 
-        for _ in range(2):
-            self.root.update_idletasks()
-            self.root.update()
+        control_widget = getattr(self, "control_frame", None)
 
-        try:
-            width = self.board_frame.winfo_width()
-            height = self.board_frame.winfo_height()
-            if width < 300 or height < 300:
-                errors.append(f"board_frame too small ({width}x{height})")
-        except Exception:
+        def _is_under_control(widget: tk.Misc, control: tk.Misc) -> bool:
+            try:
+                root_widget = widget._root()
+                parent_name = widget.winfo_parent()
+            except Exception:
+                return False
+            while parent_name:
+                try:
+                    parent = root_widget.nametowidget(parent_name)
+                except Exception:
+                    return False
+                if parent is control:
+                    return True
+                parent_name = parent.winfo_parent()
+            return False
+
+        if control_widget is not None:
+            for attr in CONTROL_CHILD_WIDGETS:
+                if not hasattr(self, attr):
+                    continue
+                widget = getattr(self, attr)
+                if not _is_under_control(widget, control_widget):
+                    errors.append(f"widget '{attr}' not under control_frame")
+
+        if stabilized_size is not None:
+            width, height = stabilized_size
+        else:
+            for _ in range(2):
+                self.root.update_idletasks()
+                self.root.update()
+            try:
+                width = self.board_frame.winfo_width()
+                height = self.board_frame.winfo_height()
+            except Exception:
+                width = height = 0
+
+        if width is None or height is None:
             errors.append("board_frame size unavailable")
+        elif width < 300 or height < 300:
+            errors.append(f"board_frame too small ({width}x{height})")
 
         return errors
 
@@ -1447,17 +1479,33 @@ def main() -> None:
 
     app = EinsteinTkApp(lang=args.lang)
     if args.self_check:
-        for _ in range(50):
+        app._request_board_resize(delay=0)
+        stabilized_width = 0
+        stabilized_height = 0
+        for _ in range(150):
             app.root.update_idletasks()
             app.root.update()
             try:
-                if app.board_frame.winfo_width() >= 300 and app.board_frame.winfo_height() >= 300:
-                    break
+                stabilized_width = app.board_frame.winfo_width()
+                stabilized_height = app.board_frame.winfo_height()
             except Exception:
-                pass
+                stabilized_width = stabilized_height = 0
+            if stabilized_width >= 300 and stabilized_height >= 300:
+                break
             time.sleep(0.01)
-        app._request_board_resize(delay=0)
-        errors = app._run_ui_contract_check()
+
+        if hasattr(app, "_request_board_resize"):
+            app._request_board_resize(delay=0)
+            app.root.update_idletasks()
+            app.root.update()
+
+        errors = []
+        if stabilized_width < 200 or stabilized_height < 200:
+            errors.append(
+                f"board_frame too small after stabilization ({stabilized_width}x{stabilized_height})"
+            )
+
+        errors.extend(app._run_ui_contract_check(stabilized_size=(stabilized_width, stabilized_height)))
         if errors:
             print("UI_SELF_CHECK_FAIL")
             for err in errors:

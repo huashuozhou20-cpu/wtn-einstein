@@ -24,12 +24,12 @@ REQUIRED_WIDGET_ATTRS: List[str] = [
 ]
 
 REQUIRED_MAPPED_WIDGETS: List[str] = [
-    "board_frame",
     "control_frame",
-    "btn_new_game",
-    "cb_red_agent",
-    "btn_roll_dice",
-    "entry_set_dice",
+]
+
+CONTROL_CHILD_WIDGETS: List[str] = [
     "entry_move_text",
+    "btn_apply_move",
     "btn_ai_move",
+    "btn_copy_last_move",
 ]
