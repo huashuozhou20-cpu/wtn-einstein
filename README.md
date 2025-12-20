@@ -52,6 +52,12 @@ Use the expectiminimax agent and specify layouts explicitly (comma-separated per
 - Layout controls: optional comma-separated layout orders (e.g., `1,2,3,4,5,6`) let you pin openings; otherwise agents pick their own.
 - WTN saving: **Save WTN** writes the current game (layouts + moves) to a timestamped `.wtn.txt` file, embedding the chosen agent names in comments. A “Copy last move” button copies the most recent move string for sharing.
 
+### WSL/Ubuntu 中文字体
+- 若在 WSL/Ubuntu 下中文界面出现方框或默认英文字体，可安装 Noto 字体集：
+  ```bash
+  sudo apt install fonts-noto-cjk fonts-noto-cjk-extra
+  ```
+
 ## Competition Stdio Adapter
 - A line-oriented adapter suitable for on-site events is available via:
   ```bash
