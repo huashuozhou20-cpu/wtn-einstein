@@ -357,25 +357,26 @@ class EinsteinTkApp:
             command=lambda *_: self._on_agents_changed(),
         ).grid(row=1, column=1, sticky="ew", padx=6, pady=2)
 
-        action_frame = ttk.LabelFrame(control_frame, text=t("ai_group", self.lang), padding=10)
-        self.ai_frame = action_frame
-        action_frame.grid(row=2, column=0, sticky="nsew")
-        action_frame.columnconfigure(1, weight=1)
-
-        dice_row = ttk.Frame(action_frame)
-        dice_row.grid(row=0, column=0, columnspan=2, sticky="ew")
-        dice_row.columnconfigure(2, weight=1)
-        self.roll_button = ttk.Button(dice_row, text=t("roll_dice", self.lang), command=self._on_roll_dice)
+        dice_frame = ttk.LabelFrame(control_frame, text=t("dice_group", self.lang), padding=10)
+        self.dice_frame = dice_frame
+        dice_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        dice_frame.columnconfigure(2, weight=1)
+        self.roll_button = ttk.Button(dice_frame, text=t("roll_dice", self.lang), command=self._on_roll_dice)
         self.roll_button.grid(row=0, column=0, padx=(0, 6), pady=4, sticky="ew")
-        self.set_dice_label = ttk.Label(dice_row, text=t("set_dice", self.lang))
+        self.set_dice_label = ttk.Label(dice_frame, text=t("set_dice", self.lang))
         self.set_dice_label.grid(row=0, column=1, sticky="e", padx=(0, 6))
-        self.dice_entry = ttk.Entry(dice_row, width=8)
+        self.dice_entry = ttk.Entry(dice_frame, width=8)
         self.dice_entry.grid(row=0, column=2, sticky="ew", pady=4)
-        self.apply_dice_button = ttk.Button(dice_row, text=t("apply", self.lang), command=self._on_set_dice)
+        self.apply_dice_button = ttk.Button(dice_frame, text=t("apply_dice", self.lang), command=self._on_set_dice)
         self.apply_dice_button.grid(row=0, column=3, padx=(6, 0), pady=4, sticky="ew")
 
+        action_frame = ttk.LabelFrame(control_frame, text=t("ai_group", self.lang), padding=10)
+        self.ai_frame = action_frame
+        action_frame.grid(row=3, column=0, sticky="nsew")
+        action_frame.columnconfigure(1, weight=1)
+
         input_row = ttk.Frame(action_frame)
-        input_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        input_row.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         input_row.columnconfigure(0, weight=1)
         self.input_label = ttk.Label(input_row, text=t("enter_move", self.lang))
         self.input_label.grid(row=0, column=0, sticky="w")
@@ -462,6 +463,7 @@ class EinsteinTkApp:
         for frame, label in [
             (self.game_frame, "game_group"),
             (self.mode_frame, "mode_group"),
+            (self.dice_frame, "dice_group"),
             (self.ai_frame, "ai_group"),
             (self.log_frame, "move_log"),
         ]:
@@ -491,7 +493,7 @@ class EinsteinTkApp:
         self.auto_apply_check.configure(text=t("auto_apply", self.lang))
         self.roll_button.configure(text=t("roll_dice", self.lang))
         self.set_dice_label.configure(text=t("set_dice", self.lang))
-        self.apply_dice_button.configure(text=t("apply", self.lang))
+        self.apply_dice_button.configure(text=t("apply_dice", self.lang))
         self.input_label.configure(text=t("enter_move", self.lang))
         self.apply_text_button.configure(text=t("apply", self.lang))
         self.ai_move_button.configure(text=t("ai_move", self.lang))
@@ -626,7 +628,7 @@ class EinsteinTkApp:
     def _refresh_ui_state(self) -> None:
         phase = self._update_phase()
         self._board_block_reason = None
-        dice_enabled = phase == PHASE_NEED_DICE
+        dice_enabled = phase != PHASE_GAME_OVER
         move_enabled = phase == PHASE_NEED_MOVE
         ai_enabled = False
         board_enabled = move_enabled
@@ -782,6 +784,16 @@ class EinsteinTkApp:
     def _on_set_dice(self) -> None:
         raw = self.dice_entry.get().strip()
         if not raw:
+            self._set_status_key("invalid_dice", level="error")
+            return
+        self._refresh_ui_state()
+        if self._phase != PHASE_NEED_DICE:
+            reason = "status_reason_need_start" if self._phase == PHASE_SETUP else "status_reason_need_move"
+            if self._phase == PHASE_GAME_OVER:
+                reason = "status_reason_game_over"
+                self._maybe_hint(reason, level="error")
+            else:
+                self._maybe_hint(reason)
             return
         self._refresh_ui_state()
         if self._phase != PHASE_NEED_DICE:
@@ -792,16 +804,17 @@ class EinsteinTkApp:
             return
         try:
             value = int(raw)
+            if value < 1 or value > 6:
+                raise ValueError(t("invalid_dice", self.lang))
             self.controller.set_dice(value)
             self._update_dice(value)
         except Exception as exc:
-            messagebox.showerror(t("dice_group", self.lang), t("illegal_move", self.lang).format(reason=exc))
             mapped = self._status_for_exception(exc)
             if mapped:
                 key, fmt = mapped
                 self._set_status_key(key, level="error", **fmt)
             else:
-                self._set_status_text(t("status_error_prefix", self.lang).format(msg=exc), level="error")
+                self._set_status_text(t("invalid_dice", self.lang), level="error")
             return
         self._clear_selection_state()
         self._update_move_hints()
