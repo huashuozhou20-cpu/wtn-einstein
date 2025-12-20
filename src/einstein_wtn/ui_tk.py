@@ -795,6 +795,13 @@ class EinsteinTkApp:
             else:
                 self._maybe_hint(reason)
             return
+        self._refresh_ui_state()
+        if self._phase != PHASE_NEED_DICE:
+            reason = "status_reason_need_start" if self._phase == PHASE_SETUP else "status_reason_need_move"
+            if self._phase == PHASE_GAME_OVER:
+                reason = "status_reason_game_over"
+            self._maybe_hint(reason)
+            return
         try:
             value = int(raw)
             if value < 1 or value > 6:
