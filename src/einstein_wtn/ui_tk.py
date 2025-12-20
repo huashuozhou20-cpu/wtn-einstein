@@ -54,6 +54,7 @@ class EinsteinTkApp:
         self.lang = lang if lang in available_langs() else "zh"
 
         self.root = tk.Tk()
+        self.root.geometry("1100x800")
         self.root.title(t("window_title", self.lang))
         font_family, has_cjk_font, base_size = self._configure_fonts()
         self.has_cjk_font = has_cjk_font
@@ -151,29 +152,63 @@ class EinsteinTkApp:
         raise ValueError(f"Unknown agent '{name}'")
 
     def _layout_widgets(self, piece_font) -> None:
-        main = ttk.Frame(self.root, padding=12)
-        main.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main.columnconfigure(0, weight=1)
-        main.columnconfigure(1, weight=1)
-        main.rowconfigure(0, weight=1)
-        main.rowconfigure(1, weight=1)
+        self.root.rowconfigure(1, weight=6)
+        self.root.rowconfigure(3, weight=2)
 
-        board_frame = ttk.Frame(main)
+        header_frame = ttk.Frame(self.root, padding=(12, 12, 12, 6))
+        header_frame.grid(row=0, column=0, sticky="ew")
+        header_frame.columnconfigure(1, weight=1)
+        self.title_label = ttk.Label(header_frame, text=t("window_title", self.lang), font=("TkDefaultFont", 14, "bold"))
+        self.title_label.grid(row=0, column=0, sticky="w")
+        language_wrap = ttk.Frame(header_frame)
+        language_wrap.grid(row=0, column=1, sticky="e")
+        language_wrap.columnconfigure(1, weight=1)
+        self.language_label = ttk.Label(language_wrap, text=t("language_label", self.lang))
+        self.language_label.grid(row=0, column=0, sticky="e", padx=(0, 6))
+        self.language_combo = ttk.Combobox(
+            language_wrap,
+            textvariable=self.lang_var,
+            values=available_langs(),
+            state="readonly",
+            width=10,
+        )
+        self.language_combo.grid(row=0, column=1, sticky="e")
+        self.language_combo.bind("<<ComboboxSelected>>", lambda _: self._on_language_changed())
+        self.header_status_label = ttk.Label(header_frame, textvariable=self.status_var)
+        self.header_status_label.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+
+        main_frame = ttk.Frame(self.root, padding=(12, 6, 12, 6))
+        main_frame.grid(row=1, column=0, sticky="nsew")
+        main_frame.columnconfigure(0, weight=3)
+        main_frame.columnconfigure(1, weight=2)
+        main_frame.rowconfigure(0, weight=1)
+
+        board_outer = ttk.Frame(main_frame)
+        board_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        board_outer.columnconfigure(0, weight=1)
+        board_outer.rowconfigure(0, weight=1)
+        self.board_container = ttk.Frame(board_outer)
+        self.board_container.grid(row=0, column=0, sticky="nsew")
+        self.board_container.columnconfigure(0, weight=1)
+        self.board_container.rowconfigure(0, weight=1)
+        self.board_container.bind("<Configure>", self._on_board_container_resize)
+
+        board_frame = ttk.Frame(self.board_container, padding=6, borderwidth=1, relief=tk.SOLID)
         self.board_frame = board_frame
-        board_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        board_frame.grid(row=0, column=0, sticky="nsew")
+        board_frame.grid_propagate(False)
         for idx in range(engine.BOARD_SIZE):
-            board_frame.columnconfigure(idx, weight=1)
-            board_frame.rowconfigure(idx, weight=1)
+            board_frame.columnconfigure(idx, weight=1, uniform="board")
+            board_frame.rowconfigure(idx, weight=1, uniform="board")
         for r in range(engine.BOARD_SIZE):
             row_buttons: List[tk.Button] = []
             for c in range(engine.BOARD_SIZE):
                 btn = tk.Button(
                     board_frame,
                     text="",
-                    width=6,
-                    height=3,
+                    width=1,
+                    height=1,
                     font=piece_font,
                     relief=tk.RAISED,
                     command=lambda rr=r, cc=c: self._on_square_click(rr, cc),
@@ -182,40 +217,113 @@ class EinsteinTkApp:
                 row_buttons.append(btn)
             self.board_buttons.append(row_buttons)
 
-        control_frame = ttk.Frame(main, padding=(6, 0, 0, 0))
+        control_frame = ttk.Frame(main_frame, padding=(0, 0, 0, 0))
         control_frame.grid(row=0, column=1, sticky="nsew")
         control_frame.columnconfigure(0, weight=1)
 
-        language_frame = ttk.Frame(control_frame)
-        language_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        language_frame.columnconfigure(1, weight=1)
-        self.language_label = ttk.Label(language_frame, text=t("language_label", self.lang))
-        self.language_label.grid(row=0, column=0, sticky="w")
-        self.language_combo = ttk.Combobox(
-            language_frame,
-            textvariable=self.lang_var,
-            values=available_langs(),
-            state="readonly",
-            width=10,
-        )
-        self.language_combo.grid(row=0, column=1, padx=6, sticky="ew")
-        self.language_combo.bind("<<ComboboxSelected>>", lambda _: self._on_language_changed())
-
-        self.status_label = ttk.Label(control_frame, textvariable=self.status_var)
-        self.status_label.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-
-        game_frame = ttk.LabelFrame(control_frame, text=t("game_group", self.lang), padding=8)
+        game_frame = ttk.LabelFrame(control_frame, text=t("game_group", self.lang), padding=10)
         self.game_frame = game_frame
-        game_frame.grid(row=2, column=0, sticky="ew", pady=4)
-        game_frame.columnconfigure((0, 1), weight=1)
+        game_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        game_frame.columnconfigure(1, weight=1)
         self.new_game_button = ttk.Button(game_frame, text=t("new_game", self.lang), command=self._on_new_game)
         self.new_game_button.grid(row=0, column=0, padx=6, pady=4, sticky="ew")
         self.save_wtn_button = ttk.Button(game_frame, text=t("save_wtn", self.lang), command=self._on_save_wtn)
         self.save_wtn_button.grid(row=0, column=1, padx=6, pady=4, sticky="ew")
 
-        agents_frame = ttk.LabelFrame(control_frame, text=t("agents_group", self.lang), padding=8)
-        self.agents_frame = agents_frame
-        agents_frame.grid(row=3, column=0, sticky="ew", pady=4)
+        layout_entries = ttk.Frame(game_frame)
+        layout_entries.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        layout_entries.columnconfigure(1, weight=1)
+        layout_entries.columnconfigure(3, weight=1)
+        self.red_layout_label = ttk.Label(layout_entries, text=t("layouts_red", self.lang))
+        self.red_layout_label.grid(row=0, column=0, sticky="w", pady=2)
+        self.red_layout_entry.grid(in_=layout_entries, row=0, column=1, sticky="ew", padx=(6, 12))
+        self.blue_layout_label = ttk.Label(layout_entries, text=t("layouts_blue", self.lang))
+        self.blue_layout_label.grid(row=1, column=0, sticky="w", pady=2)
+        self.blue_layout_entry.grid(in_=layout_entries, row=1, column=1, sticky="ew", padx=(6, 12))
+
+        self.red_layout_text_label = ttk.Label(game_frame, text=t("layout_wtn_red", self.lang))
+        self.red_layout_text_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.red_layout_text.grid(in_=game_frame, row=3, column=0, columnspan=2, sticky="ew", pady=2)
+        self.blue_layout_text_label = ttk.Label(game_frame, text=t("layout_wtn_blue", self.lang))
+        self.blue_layout_text_label.grid(row=4, column=0, sticky="w", pady=(6, 0))
+        self.blue_layout_text.grid(in_=game_frame, row=5, column=0, columnspan=2, sticky="ew", pady=2)
+
+        layout_buttons = ttk.Frame(game_frame)
+        layout_buttons.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        layout_buttons.columnconfigure((0, 1), weight=1)
+        self.apply_layout_button = ttk.Button(
+            layout_buttons, text=t("apply_layout", self.lang), command=self._on_apply_layouts
+        )
+        self.apply_layout_button.grid(row=0, column=0, padx=4, sticky="ew")
+        self.new_game_layout_button = ttk.Button(
+            layout_buttons, text=t("new_game_layout", self.lang), command=self._on_new_game_from_layout
+        )
+        self.new_game_layout_button.grid(row=0, column=1, padx=4, sticky="ew")
+
+        edit_tools = ttk.Frame(game_frame)
+        edit_tools.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        edit_tools.columnconfigure(1, weight=1)
+        self.edit_toggle = ttk.Checkbutton(
+            edit_tools,
+            text=t("edit_layout_mode", self.lang),
+            variable=self.edit_mode_var,
+            command=self._on_toggle_edit_mode,
+        )
+        self.edit_toggle.grid(row=0, column=0, columnspan=2, sticky="w")
+        self.edit_side_label = ttk.Label(edit_tools, text=t("edit_side", self.lang))
+        self.edit_side_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.edit_red_radio = ttk.Radiobutton(
+            edit_tools, text=t("red_agent", self.lang), variable=self.edit_side_var, value="R"
+        )
+        self.edit_red_radio.grid(row=1, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
+        self.edit_blue_radio = ttk.Radiobutton(
+            edit_tools, text=t("blue_agent", self.lang), variable=self.edit_side_var, value="B"
+        )
+        self.edit_blue_radio.grid(row=1, column=2, sticky="w", padx=(6, 0), pady=(6, 0))
+        self.edit_piece_label = ttk.Label(edit_tools, text=t("edit_piece", self.lang))
+        self.edit_piece_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.edit_piece_combo = ttk.Combobox(
+            edit_tools,
+            textvariable=self.edit_piece_var,
+            values=[str(i) for i in range(1, 7)],
+            state="readonly",
+            width=6,
+        )
+        self.edit_piece_combo.grid(row=2, column=1, sticky="w", pady=(6, 0))
+        self.clear_piece_button = ttk.Button(edit_tools, text=t("clear_piece", self.lang), command=self._clear_selected_piece)
+        self.clear_piece_button.grid(row=2, column=2, padx=4, pady=(6, 0), sticky="ew")
+        self.clear_side_button = ttk.Button(edit_tools, text=t("clear_side", self.lang), command=self._clear_side)
+        self.clear_side_button.grid(row=3, column=2, padx=4, pady=4, sticky="ew")
+        self.mirror_button = ttk.Button(edit_tools, text=t("mirror_layout", self.lang), command=self._mirror_layout)
+        self.mirror_button.grid(row=3, column=1, padx=4, pady=4, sticky="ew")
+        fill_frame = ttk.Frame(edit_tools)
+        fill_frame.grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.auto_fill_red_check = ttk.Checkbutton(
+            fill_frame, text=t("auto_fill_red", self.lang), variable=self.auto_fill_red_var
+        )
+        self.auto_fill_red_check.grid(row=0, column=0, sticky="w")
+        self.auto_fill_blue_check = ttk.Checkbutton(
+            fill_frame, text=t("auto_fill_blue", self.lang), variable=self.auto_fill_blue_var
+        )
+        self.auto_fill_blue_check.grid(row=0, column=1, sticky="w", padx=(12, 0))
+
+        play_frame = ttk.LabelFrame(control_frame, text=t("mode_group", self.lang), padding=10)
+        self.mode_frame = play_frame
+        play_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        play_frame.columnconfigure(1, weight=1)
+        self.mode_play_radio = ttk.Radiobutton(
+            play_frame, text=t("mode_play", self.lang), variable=self.mode_var, value="play"
+        )
+        self.mode_play_radio.grid(row=0, column=0, sticky="w", pady=2)
+        self.mode_advise_radio = ttk.Radiobutton(
+            play_frame, text=t("mode_advise", self.lang), variable=self.mode_var, value="advise"
+        )
+        self.mode_advise_radio.grid(row=0, column=1, sticky="w", padx=(12, 0), pady=2)
+        self.auto_apply_check = ttk.Checkbutton(play_frame, text=t("auto_apply", self.lang), variable=self.auto_apply_var)
+        self.auto_apply_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+        agents_frame = ttk.Frame(play_frame)
+        agents_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         agents_frame.columnconfigure(1, weight=1)
         self.red_agent_label = ttk.Label(agents_frame, text=t("red_agent", self.lang))
         self.red_agent_label.grid(row=0, column=0, sticky="w")
@@ -235,184 +343,102 @@ class EinsteinTkApp:
             *[label for label, _ in AGENT_CHOICES],
             command=lambda *_: self._on_agents_changed(),
         ).grid(row=1, column=1, sticky="ew", padx=6, pady=2)
-        self.red_layout_label = ttk.Label(agents_frame, text=t("layouts_red", self.lang))
-        self.red_layout_label.grid(row=2, column=0, sticky="w")
-        self.red_layout_entry.grid(in_=agents_frame, row=2, column=1, sticky="ew", padx=6, pady=2)
-        self.blue_layout_label = ttk.Label(agents_frame, text=t("layouts_blue", self.lang))
-        self.blue_layout_label.grid(row=3, column=0, sticky="w")
-        self.blue_layout_entry.grid(in_=agents_frame, row=3, column=1, sticky="ew", padx=6, pady=2)
 
-        layout_frame = ttk.LabelFrame(control_frame, text=t("layout_group", self.lang), padding=8)
-        self.layout_frame = layout_frame
-        layout_frame.grid(row=4, column=0, sticky="ew", pady=4)
-        layout_frame.columnconfigure(0, weight=1)
-        self.red_layout_text_label = ttk.Label(layout_frame, text=t("layout_wtn_red", self.lang))
-        self.red_layout_text_label.grid(row=0, column=0, sticky="w")
-        self.red_layout_text.grid(in_=layout_frame, row=1, column=0, columnspan=2, sticky="ew", pady=2)
-        self.blue_layout_text_label = ttk.Label(layout_frame, text=t("layout_wtn_blue", self.lang))
-        self.blue_layout_text_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
-        self.blue_layout_text.grid(in_=layout_frame, row=3, column=0, columnspan=2, sticky="ew", pady=2)
-        layout_buttons = ttk.Frame(layout_frame)
-        layout_buttons.grid(row=4, column=0, sticky="ew", pady=(6, 0))
-        layout_buttons.columnconfigure((0, 1), weight=1)
-        self.apply_layout_button = ttk.Button(
-            layout_buttons, text=t("apply_layout", self.lang), command=self._on_apply_layouts
-        )
-        self.apply_layout_button.grid(row=0, column=0, padx=4, sticky="ew")
-        self.new_game_layout_button = ttk.Button(
-            layout_buttons, text=t("new_game_layout", self.lang), command=self._on_new_game_from_layout
-        )
-        self.new_game_layout_button.grid(row=0, column=1, padx=4, sticky="ew")
-        self.edit_toggle = ttk.Checkbutton(
-            layout_frame,
-            text=t("edit_layout_mode", self.lang),
-            variable=self.edit_mode_var,
-            command=self._on_toggle_edit_mode,
-        )
-        self.edit_toggle.grid(row=5, column=0, sticky="w", pady=(8, 0))
-        edit_tools = ttk.Frame(layout_frame)
-        edit_tools.grid(row=6, column=0, sticky="ew", pady=4)
-        edit_tools.columnconfigure(1, weight=1)
-        self.edit_side_label = ttk.Label(edit_tools, text=t("edit_side", self.lang))
-        self.edit_side_label.grid(row=0, column=0, sticky="w")
-        self.edit_red_radio = ttk.Radiobutton(
-            edit_tools, text=t("red_agent", self.lang), variable=self.edit_side_var, value="R"
-        )
-        self.edit_red_radio.grid(row=0, column=1, sticky="w")
-        self.edit_blue_radio = ttk.Radiobutton(
-            edit_tools, text=t("blue_agent", self.lang), variable=self.edit_side_var, value="B"
-        )
-        self.edit_blue_radio.grid(row=0, column=2, sticky="w", padx=(6, 0))
-        self.edit_piece_label = ttk.Label(edit_tools, text=t("edit_piece", self.lang))
-        self.edit_piece_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
-        self.edit_piece_combo = ttk.Combobox(
-            edit_tools,
-            textvariable=self.edit_piece_var,
-            values=[str(i) for i in range(1, 7)],
-            state="readonly",
-            width=6,
-        )
-        self.edit_piece_combo.grid(row=1, column=1, sticky="w", pady=(6, 0))
-        self.clear_piece_button = ttk.Button(edit_tools, text=t("clear_piece", self.lang), command=self._clear_selected_piece)
-        self.clear_piece_button.grid(row=1, column=2, padx=4, pady=(6, 0), sticky="ew")
-        self.clear_side_button = ttk.Button(edit_tools, text=t("clear_side", self.lang), command=self._clear_side)
-        self.clear_side_button.grid(row=2, column=2, padx=4, pady=4, sticky="ew")
-        self.mirror_button = ttk.Button(edit_tools, text=t("mirror_layout", self.lang), command=self._mirror_layout)
-        self.mirror_button.grid(row=2, column=1, padx=4, pady=4, sticky="ew")
-        fill_frame = ttk.Frame(layout_frame)
-        fill_frame.grid(row=7, column=0, sticky="w")
-        self.auto_fill_red_check = ttk.Checkbutton(
-            fill_frame, text=t("auto_fill_red", self.lang), variable=self.auto_fill_red_var
-        )
-        self.auto_fill_red_check.grid(row=0, column=0, sticky="w")
-        self.auto_fill_blue_check = ttk.Checkbutton(
-            fill_frame, text=t("auto_fill_blue", self.lang), variable=self.auto_fill_blue_var
-        )
-        self.auto_fill_blue_check.grid(row=0, column=1, sticky="w", padx=(12, 0))
+        action_frame = ttk.LabelFrame(control_frame, text=t("ai_group", self.lang), padding=10)
+        self.ai_frame = action_frame
+        action_frame.grid(row=2, column=0, sticky="nsew")
+        action_frame.columnconfigure(1, weight=1)
 
-        mode_frame = ttk.LabelFrame(control_frame, text=t("mode_group", self.lang), padding=8)
-        self.mode_frame = mode_frame
-        mode_frame.grid(row=5, column=0, sticky="ew", pady=4)
-        mode_frame.columnconfigure((0, 1), weight=1)
-        self.mode_play_radio = ttk.Radiobutton(
-            mode_frame, text=t("mode_play", self.lang), variable=self.mode_var, value="play"
-        )
-        self.mode_play_radio.grid(row=0, column=0, sticky="w", pady=2)
-        self.mode_advise_radio = ttk.Radiobutton(
-            mode_frame, text=t("mode_advise", self.lang), variable=self.mode_var, value="advise"
-        )
-        self.mode_advise_radio.grid(row=0, column=1, sticky="w", padx=6, pady=2)
-        self.auto_apply_check = ttk.Checkbutton(mode_frame, text=t("auto_apply", self.lang), variable=self.auto_apply_var)
-        self.auto_apply_check.grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(6, 0)
-        )
+        dice_row = ttk.Frame(action_frame)
+        dice_row.grid(row=0, column=0, columnspan=2, sticky="ew")
+        dice_row.columnconfigure(2, weight=1)
+        self.roll_button = ttk.Button(dice_row, text=t("roll_dice", self.lang), command=self._on_roll_dice)
+        self.roll_button.grid(row=0, column=0, padx=(0, 6), pady=4, sticky="ew")
+        self.set_dice_label = ttk.Label(dice_row, text=t("set_dice", self.lang))
+        self.set_dice_label.grid(row=0, column=1, sticky="e", padx=(0, 6))
+        self.dice_entry = ttk.Entry(dice_row, width=8)
+        self.dice_entry.grid(row=0, column=2, sticky="ew", pady=4)
+        self.apply_dice_button = ttk.Button(dice_row, text=t("apply", self.lang), command=self._on_set_dice)
+        self.apply_dice_button.grid(row=0, column=3, padx=(6, 0), pady=4, sticky="ew")
 
-        dice_frame = ttk.LabelFrame(control_frame, text=t("dice_group", self.lang), padding=8)
-        self.dice_frame = dice_frame
-        dice_frame.grid(row=6, column=0, sticky="ew", pady=4)
-        dice_frame.columnconfigure((0, 1, 2, 3), weight=1)
-        self.roll_button = ttk.Button(dice_frame, text=t("roll_dice", self.lang), command=self._on_roll_dice)
-        self.roll_button.grid(row=0, column=0, padx=6, pady=4, sticky="ew")
-        self.set_dice_label = ttk.Label(dice_frame, text=t("set_dice", self.lang))
-        self.set_dice_label.grid(row=0, column=1, sticky="e")
-        self.dice_entry = ttk.Entry(dice_frame, width=10)
-        self.dice_entry.grid(row=0, column=2, sticky="ew", padx=4)
-        self.apply_dice_button = ttk.Button(dice_frame, text=t("apply", self.lang), command=self._on_set_dice)
-        self.apply_dice_button.grid(row=0, column=3, padx=6, sticky="ew")
-
-        input_frame = ttk.LabelFrame(control_frame, text=t("input_group", self.lang), padding=8)
-        self.input_frame = input_frame
-        input_frame.grid(row=7, column=0, sticky="ew", pady=4)
-        input_frame.columnconfigure(0, weight=1)
-        self.input_label = ttk.Label(input_frame, text=t("enter_move", self.lang))
+        input_row = ttk.Frame(action_frame)
+        input_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        input_row.columnconfigure(0, weight=1)
+        self.input_label = ttk.Label(input_row, text=t("enter_move", self.lang))
         self.input_label.grid(row=0, column=0, sticky="w")
-        self.move_text_entry = ttk.Entry(input_frame, width=24)
+        self.move_text_entry = ttk.Entry(input_row, width=24)
         self.move_text_entry.grid(row=1, column=0, sticky="ew", pady=4)
         self.move_text_entry.bind("<Return>", lambda _: self._on_text_move())
-        self.apply_text_button = ttk.Button(input_frame, text=t("apply", self.lang), command=self._on_text_move)
-        self.apply_text_button.grid(row=1, column=1, padx=6, pady=4, sticky="ew")
+        self.apply_text_button = ttk.Button(input_row, text=t("apply", self.lang), command=self._on_text_move)
+        self.apply_text_button.grid(row=1, column=1, padx=(6, 0), pady=4, sticky="ew")
 
-        ai_frame = ttk.LabelFrame(control_frame, text=t("ai_group", self.lang), padding=8)
-        self.ai_frame = ai_frame
-        ai_frame.grid(row=8, column=0, sticky="ew", pady=4)
-        ai_frame.columnconfigure(0, weight=1)
-        self.ai_move_button = ttk.Button(ai_frame, text=t("ai_move", self.lang), command=self._on_ai_move)
-        self.ai_move_button.grid(row=0, column=0, padx=6, pady=4, sticky="ew")
-
-        info_frame = ttk.Frame(main, padding=(0, 8, 0, 0))
-        info_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
-        info_frame.columnconfigure(0, weight=1)
-        info_frame.rowconfigure(2, weight=1)
-
-        summary_frame = ttk.Frame(info_frame)
-        summary_frame.grid(row=0, column=0, sticky="ew")
-        ttk.Label(summary_frame, textvariable=self.turn_var, font=("DejaVu Sans", 12, "bold")).grid(
-            row=0, column=0, padx=(0, 12), sticky="w"
+        actions_buttons = ttk.Frame(action_frame)
+        actions_buttons.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        actions_buttons.columnconfigure((0, 1), weight=1)
+        self.ai_move_button = ttk.Button(actions_buttons, text=t("ai_move", self.lang), command=self._on_ai_move)
+        self.ai_move_button.grid(row=0, column=0, padx=4, sticky="ew")
+        self.copy_last_button = ttk.Button(
+            actions_buttons, text=t("copy_last", self.lang), command=self._on_copy_last_move
         )
-        self.dice_label = ttk.Label(summary_frame, text=t("dice_label", self.lang).format(dice="-"))
-        self.dice_label.grid(row=0, column=1, padx=(0, 12), sticky="w")
-        self.can_move_label = ttk.Label(summary_frame, textvariable=self.info_can_move_var)
-        self.can_move_label.grid(row=0, column=2, sticky="w")
+        self.copy_last_button.grid(row=0, column=1, padx=4, sticky="ew")
 
-        recent_frame = ttk.Frame(info_frame)
-        recent_frame.grid(row=1, column=0, sticky="ew", pady=4)
-        recent_frame.columnconfigure(1, weight=1)
-        self.last_move_label = ttk.Label(recent_frame, text=t("info_last_move", self.lang))
-        self.last_move_label.grid(row=0, column=0, sticky="w")
-        ttk.Label(recent_frame, textvariable=self.last_move_var).grid(row=0, column=1, sticky="ew")
-        ttk.Button(recent_frame, text=t("copy_last", self.lang), command=self._on_copy_last_move).grid(
-            row=0, column=2, padx=6, sticky="e"
-        )
-        self.ai_suggestion_label = ttk.Label(recent_frame, text=t("info_ai_suggestion", self.lang))
-        self.ai_suggestion_label.grid(row=1, column=0, sticky="w")
-        ttk.Label(recent_frame, textvariable=self.ai_suggestion_var).grid(row=1, column=1, sticky="ew")
+        status_frame = ttk.Frame(self.root, padding=(12, 0, 12, 6))
+        status_frame.grid(row=2, column=0, sticky="ew")
+        status_frame.columnconfigure(5, weight=1)
+        self.turn_heading = ttk.Label(status_frame, text=t("info_turn", self.lang))
+        self.turn_heading.grid(row=0, column=0, sticky="w")
+        self.turn_label = ttk.Label(status_frame, textvariable=self.turn_var, font=("TkDefaultFont", 11, "bold"))
+        self.turn_label.grid(row=0, column=1, sticky="w", padx=(4, 12))
+        self.dice_heading = ttk.Label(status_frame, text=t("info_dice", self.lang))
+        self.dice_heading.grid(row=0, column=2, sticky="w")
+        self.dice_value_var = tk.StringVar(value=t("dice_label", self.lang).format(dice="-"))
+        self.dice_label = ttk.Label(status_frame, textvariable=self.dice_value_var)
+        self.dice_label.grid(row=0, column=3, sticky="w", padx=(4, 12))
+        self.can_move_heading = ttk.Label(status_frame, text=t("info_can_move", self.lang))
+        self.can_move_heading.grid(row=0, column=4, sticky="w")
+        self.can_move_label = ttk.Label(status_frame, textvariable=self.info_can_move_var)
+        self.can_move_label.grid(row=0, column=5, sticky="w", padx=(4, 12))
+        self.last_move_heading = ttk.Label(status_frame, text=t("info_last_move", self.lang))
+        self.last_move_heading.grid(row=0, column=6, sticky="w")
+        self.last_move_label = ttk.Label(status_frame, textvariable=self.last_move_var)
+        self.last_move_label.grid(row=0, column=7, sticky="w", padx=(4, 12))
+        self.status_label = ttk.Label(status_frame, textvariable=self.status_var)
+        self.status_label.grid(row=0, column=8, sticky="ew")
+        status_frame.columnconfigure(8, weight=1)
 
-        log_frame = ttk.LabelFrame(info_frame, text=t("move_log", self.lang), padding=8)
+        self.ai_suggestion_heading = ttk.Label(status_frame, text=t("info_ai_suggestion", self.lang))
+        self.ai_suggestion_heading.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.ai_suggestion_label = ttk.Label(status_frame, textvariable=self.ai_suggestion_var)
+        self.ai_suggestion_label.grid(row=1, column=1, columnspan=7, sticky="w", pady=(6, 0))
+
+        log_frame = ttk.LabelFrame(self.root, text=t("move_log", self.lang), padding=8)
         self.log_frame = log_frame
-        log_frame.grid(row=2, column=0, sticky="nsew", pady=(6, 0))
+        log_frame.grid(row=3, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        self.root.rowconfigure(3, weight=2)
         log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
         log_text_frame = ttk.Frame(log_frame)
         log_text_frame.grid(row=0, column=0, sticky="nsew")
-        log_frame.rowconfigure(0, weight=1)
+        log_text_frame.columnconfigure(0, weight=1)
+        log_text_frame.rowconfigure(0, weight=1)
         scrollbar = ttk.Scrollbar(log_text_frame, orient=tk.VERTICAL)
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.log_text.config(yscrollcommand=scrollbar.set)
         scrollbar.config(command=self.log_text.yview)
         self.log_text.grid(in_=log_text_frame, row=0, column=0, sticky="nsew")
-        log_text_frame.columnconfigure(0, weight=1)
-        log_text_frame.rowconfigure(0, weight=1)
+
+    def _on_board_container_resize(self, event) -> None:
+        size = min(event.width, event.height)
+        self.board_frame.configure(width=size, height=size)
 
     def _refresh_texts(self) -> None:
         self.root.title(t("window_title", self.lang))
+        self.title_label.configure(text=t("window_title", self.lang))
         self.language_label.configure(text=t("language_label", self.lang))
         self.language_combo.configure(values=available_langs())
         for frame, label in [
             (self.game_frame, "game_group"),
-            (self.agents_frame, "agents_group"),
-            (self.layout_frame, "layout_group"),
             (self.mode_frame, "mode_group"),
-            (self.dice_frame, "dice_group"),
-            (self.input_frame, "input_group"),
             (self.ai_frame, "ai_group"),
             (self.log_frame, "move_log"),
         ]:
@@ -446,10 +472,14 @@ class EinsteinTkApp:
         self.input_label.configure(text=t("enter_move", self.lang))
         self.apply_text_button.configure(text=t("apply", self.lang))
         self.ai_move_button.configure(text=t("ai_move", self.lang))
-        self.last_move_label.configure(text=t("info_last_move", self.lang))
-        self.ai_suggestion_label.configure(text=t("info_ai_suggestion", self.lang))
+        self.copy_last_button.configure(text=t("copy_last", self.lang))
+        self.turn_heading.configure(text=t("info_turn", self.lang))
+        self.dice_heading.configure(text=t("info_dice", self.lang))
+        self.can_move_heading.configure(text=t("info_can_move", self.lang))
+        self.last_move_heading.configure(text=t("info_last_move", self.lang))
+        self.ai_suggestion_heading.configure(text=t("info_ai_suggestion", self.lang))
         self.turn_var.set(t("turn_label", self.lang).format(turn=self.controller.state.turn.name))
-        self.dice_label.configure(text=t("dice_label", self.lang).format(dice=self.dice_var.get()))
+        self.dice_value_var.set(t("dice_label", self.lang).format(dice=self.dice_var.get()))
         self.log_frame.configure(text=t("move_log", self.lang))
         if not self.controller.history:
             self.last_move_var.set(t("no_last_move", self.lang))
@@ -479,7 +509,9 @@ class EinsteinTkApp:
             "error": "#c62828",
             "warning": "#ef6c00",
         }
-        self.status_label.configure(foreground=color_map.get(level, "#616161"))
+        color = color_map.get(level, "#616161")
+        self.status_label.configure(foreground=color)
+        self.header_status_label.configure(foreground=color)
         self.status_var.set(text)
 
     def _set_status_key(self, key: str, level: str = "info", **fmt) -> None:
@@ -1000,7 +1032,7 @@ class EinsteinTkApp:
 
     def _update_dice(self, value: int) -> None:
         self.dice_var.set(str(value))
-        self.dice_label.config(text=t("dice_label", self.lang).format(dice=value))
+        self.dice_value_var.set(t("dice_label", self.lang).format(dice=value))
         self._maybe_auto_step_ai()
 
     def _update_move_hints(self) -> None:
@@ -1008,18 +1040,18 @@ class EinsteinTkApp:
             self.info_can_move_var.set(t("layout_edit_hint", self.lang))
             return
         if self.controller.dice is None:
-            self.info_can_move_var.set(t("info_can_move", self.lang) + ": -")
+            self.info_can_move_var.set("-")
             return
         try:
             legal = self.controller.legal_moves()
         except Exception:
-            self.info_can_move_var.set(t("info_can_move", self.lang) + ": -")
+            self.info_can_move_var.set("-")
             return
         pieces = sorted({mv.piece_id for mv in legal})
         if pieces:
-            detail = t("you_can_move", self.lang).format(pieces=", ".join(str(p) for p in pieces))
+            detail = ", ".join(str(p) for p in pieces)
         else:
-            detail = t("info_can_move", self.lang) + ": -"
+            detail = "-"
         dice_value = self.controller.dice
         if dice_value is not None and dice_value not in pieces and pieces:
             nearest = min(pieces, key=lambda p: abs(p - dice_value))
