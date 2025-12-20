@@ -19,6 +19,11 @@ from .types import Move, Player
 from .wtn_format import rc_to_sq
 from .wtn_layout import parse_layout_line
 
+PHASE_SETUP = "setup"
+PHASE_NEED_DICE = "need_dice"
+PHASE_NEED_MOVE = "need_move"
+PHASE_GAME_OVER = "game_over"
+
 AGENT_CHOICES = [
     ("human", None),
     ("opening-expecti", OpeningExpectiAgent),
@@ -54,8 +59,10 @@ class EinsteinTkApp:
         self.lang = lang if lang in available_langs() else "zh"
 
         self.root = tk.Tk()
-        self.root.title(t("window_title", self.lang))
         font_family, has_cjk_font, base_size = self._configure_fonts()
+        self.root.title(t("window_title", self.lang))
+        self.root.geometry("1200x820")
+        self.root.minsize(1100, 760)
         self.has_cjk_font = has_cjk_font
         piece_font = (font_family, base_size + 5, "bold")
 
@@ -67,10 +74,15 @@ class EinsteinTkApp:
         self.dice_var = tk.StringVar(value="-")
         self.status_var = tk.StringVar(value="")
         self._status_state = {"key": None, "fmt": {}, "level": "info"}
+        self.phase_var = tk.StringVar(value=t("phase_setup", self.lang))
+        self.next_step_var = tk.StringVar(value=t("next_step_setup", self.lang))
         self.last_move_var = tk.StringVar(value=t("no_last_move", self.lang))
         self.ai_suggestion_var = tk.StringVar(value=t("no_last_move", self.lang))
         self._ai_suggestion_empty = True
         self.info_can_move_var = tk.StringVar(value="-")
+        self._phase = PHASE_SETUP
+        self._game_started = False
+        self._board_block_reason: Optional[str] = None
 
         self.red_layout_entry = tk.Entry(self.root, width=24)
         self.red_layout_entry.insert(0, "1,2,3,4,5,6")
@@ -102,10 +114,14 @@ class EinsteinTkApp:
 
         self.controller = self._build_controller()
         self._layout_widgets(piece_font)
+        self.root.update_idletasks()
+        self._request_board_resize(delay=0)
+        self._center_window()
         initial_status_key = "status_ready" if self.has_cjk_font else "missing_cjk_fonts"
         initial_level = "info" if self.has_cjk_font else "warning"
         self._set_status_key(initial_status_key, level=initial_level)
         self._refresh_board()
+        self._refresh_ui_state()
 
     def _configure_fonts(self) -> Tuple[str, bool, int]:
         available_fonts = set(tkfont.families(self.root))
@@ -151,29 +167,73 @@ class EinsteinTkApp:
         raise ValueError(f"Unknown agent '{name}'")
 
     def _layout_widgets(self, piece_font) -> None:
-        main = ttk.Frame(self.root, padding=12)
-        main.grid(row=0, column=0, sticky="nsew")
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main.columnconfigure(0, weight=1)
-        main.columnconfigure(1, weight=1)
-        main.rowconfigure(0, weight=1)
-        main.rowconfigure(1, weight=1)
+        self.root.rowconfigure(1, weight=0)
+        self.root.rowconfigure(2, weight=1)
 
-        board_frame = ttk.Frame(main)
+        content_frame = ttk.Frame(self.root)
+        content_frame.grid(row=0, column=0, sticky="nsew")
+        content_frame.columnconfigure(0, weight=1)
+        content_frame.rowconfigure(0, weight=0)
+        content_frame.rowconfigure(1, weight=1)
+
+        header_frame = ttk.Frame(content_frame, padding=(12, 12, 12, 6))
+        header_frame.grid(row=0, column=0, sticky="ew")
+        header_frame.columnconfigure(1, weight=1)
+        self.title_label = ttk.Label(header_frame, text=t("window_title", self.lang), font=("TkDefaultFont", 14, "bold"))
+        self.title_label.grid(row=0, column=0, sticky="w")
+        language_wrap = ttk.Frame(header_frame)
+        language_wrap.grid(row=0, column=1, sticky="e")
+        language_wrap.columnconfigure(1, weight=1)
+        self.language_label = ttk.Label(language_wrap, text=t("language_label", self.lang))
+        self.language_label.grid(row=0, column=0, sticky="e", padx=(0, 6))
+        self.language_combo = ttk.Combobox(
+            language_wrap,
+            textvariable=self.lang_var,
+            values=available_langs(),
+            state="readonly",
+            width=10,
+        )
+        self.language_combo.grid(row=0, column=1, sticky="e")
+        self.language_combo.bind("<<ComboboxSelected>>", lambda _: self._on_language_changed())
+        self.help_button = ttk.Button(header_frame, text=t("help_button", self.lang), command=self._on_help)
+        self.help_button.grid(row=0, column=2, sticky="e")
+        self.header_status_label = ttk.Label(header_frame, textvariable=self.status_var)
+        self.header_status_label.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+
+        main_frame = ttk.Frame(content_frame, padding=(12, 6, 12, 6))
+        main_frame.grid(row=1, column=0, sticky="nsew")
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.columnconfigure(1, weight=0, minsize=420)
+        main_frame.rowconfigure(0, weight=1)
+
+        board_outer = ttk.Frame(main_frame)
+        board_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        board_outer.columnconfigure(0, weight=1)
+        board_outer.rowconfigure(0, weight=1)
+        self.board_container = ttk.Frame(board_outer)
+        self.board_container.grid(row=0, column=0, sticky="nsew")
+        self.board_container.columnconfigure(0, weight=1)
+        self.board_container.rowconfigure(0, weight=1)
+        self._resize_after: Optional[str] = None
+        self.board_container.bind("<Configure>", self._on_board_container_resize)
+
+        board_frame = ttk.Frame(self.board_container, padding=6, borderwidth=1, relief=tk.SOLID)
         self.board_frame = board_frame
-        board_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        board_frame.place(relx=0.5, rely=0.5, anchor="center")
+        board_frame.grid_propagate(False)
         for idx in range(engine.BOARD_SIZE):
-            board_frame.columnconfigure(idx, weight=1)
-            board_frame.rowconfigure(idx, weight=1)
+            board_frame.columnconfigure(idx, weight=1, uniform="board")
+            board_frame.rowconfigure(idx, weight=1, uniform="board")
         for r in range(engine.BOARD_SIZE):
             row_buttons: List[tk.Button] = []
             for c in range(engine.BOARD_SIZE):
                 btn = tk.Button(
                     board_frame,
                     text="",
-                    width=6,
-                    height=3,
+                    width=1,
+                    height=1,
                     font=piece_font,
                     relief=tk.RAISED,
                     command=lambda rr=r, cc=c: self._on_square_click(rr, cc),
@@ -182,40 +242,29 @@ class EinsteinTkApp:
                 row_buttons.append(btn)
             self.board_buttons.append(row_buttons)
 
-        control_frame = ttk.Frame(main, padding=(6, 0, 0, 0))
-        control_frame.grid(row=0, column=1, sticky="nsew")
-        control_frame.columnconfigure(0, weight=1)
+        control_frame = ttk.Frame(main_frame, padding=(0, 0, 0, 0))
+        control_frame.grid(row=0, column=1, sticky="ns", padx=(12, 0), pady=(0, 8))
+        control_frame.columnconfigure(0, weight=1, minsize=420)
+        control_frame.grid_propagate(False)
+        control_frame.configure(width=420)
 
-        language_frame = ttk.Frame(control_frame)
-        language_frame.grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        language_frame.columnconfigure(1, weight=1)
-        self.language_label = ttk.Label(language_frame, text=t("language_label", self.lang))
-        self.language_label.grid(row=0, column=0, sticky="w")
-        self.language_combo = ttk.Combobox(
-            language_frame,
-            textvariable=self.lang_var,
-            values=available_langs(),
-            state="readonly",
-            width=10,
+        play_frame = ttk.LabelFrame(control_frame, text=t("play_agents_group", self.lang), padding=10)
+        self.play_frame = play_frame
+        play_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        play_frame.columnconfigure(1, weight=1)
+        self.mode_play_radio = ttk.Radiobutton(
+            play_frame, text=t("mode_play", self.lang), variable=self.mode_var, value="play", command=self._refresh_ui_state
         )
-        self.language_combo.grid(row=0, column=1, padx=6, sticky="ew")
-        self.language_combo.bind("<<ComboboxSelected>>", lambda _: self._on_language_changed())
+        self.mode_play_radio.grid(row=0, column=0, sticky="w", pady=2)
+        self.mode_advise_radio = ttk.Radiobutton(
+            play_frame, text=t("mode_advise", self.lang), variable=self.mode_var, value="advise", command=self._refresh_ui_state
+        )
+        self.mode_advise_radio.grid(row=0, column=1, sticky="w", padx=(12, 0), pady=2)
+        self.auto_apply_check = ttk.Checkbutton(play_frame, text=t("auto_apply", self.lang), variable=self.auto_apply_var)
+        self.auto_apply_check.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
-        self.status_label = ttk.Label(control_frame, textvariable=self.status_var)
-        self.status_label.grid(row=1, column=0, sticky="ew", pady=(0, 6))
-
-        game_frame = ttk.LabelFrame(control_frame, text=t("game_group", self.lang), padding=8)
-        self.game_frame = game_frame
-        game_frame.grid(row=2, column=0, sticky="ew", pady=4)
-        game_frame.columnconfigure((0, 1), weight=1)
-        self.new_game_button = ttk.Button(game_frame, text=t("new_game", self.lang), command=self._on_new_game)
-        self.new_game_button.grid(row=0, column=0, padx=6, pady=4, sticky="ew")
-        self.save_wtn_button = ttk.Button(game_frame, text=t("save_wtn", self.lang), command=self._on_save_wtn)
-        self.save_wtn_button.grid(row=0, column=1, padx=6, pady=4, sticky="ew")
-
-        agents_frame = ttk.LabelFrame(control_frame, text=t("agents_group", self.lang), padding=8)
-        self.agents_frame = agents_frame
-        agents_frame.grid(row=3, column=0, sticky="ew", pady=4)
+        agents_frame = ttk.Frame(play_frame)
+        agents_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         agents_frame.columnconfigure(1, weight=1)
         self.red_agent_label = ttk.Label(agents_frame, text=t("red_agent", self.lang))
         self.red_agent_label.grid(row=0, column=0, sticky="w")
@@ -235,25 +284,80 @@ class EinsteinTkApp:
             *[label for label, _ in AGENT_CHOICES],
             command=lambda *_: self._on_agents_changed(),
         ).grid(row=1, column=1, sticky="ew", padx=6, pady=2)
-        self.red_layout_label = ttk.Label(agents_frame, text=t("layouts_red", self.lang))
-        self.red_layout_label.grid(row=2, column=0, sticky="w")
-        self.red_layout_entry.grid(in_=agents_frame, row=2, column=1, sticky="ew", padx=6, pady=2)
-        self.blue_layout_label = ttk.Label(agents_frame, text=t("layouts_blue", self.lang))
-        self.blue_layout_label.grid(row=3, column=0, sticky="w")
-        self.blue_layout_entry.grid(in_=agents_frame, row=3, column=1, sticky="ew", padx=6, pady=2)
 
-        layout_frame = ttk.LabelFrame(control_frame, text=t("layout_group", self.lang), padding=8)
+        dice_frame = ttk.LabelFrame(control_frame, text=t("dice_group", self.lang), padding=10)
+        self.dice_frame = dice_frame
+        dice_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        dice_frame.columnconfigure(1, weight=1)
+        self.roll_button = ttk.Button(dice_frame, text=t("roll_dice", self.lang), command=self._on_roll_dice)
+        self.roll_button.grid(row=0, column=0, padx=(0, 6), pady=4, sticky="ew")
+        self.dice_entry = ttk.Entry(dice_frame, width=8)
+        self.dice_entry.grid(row=0, column=1, sticky="ew", pady=4)
+        self.apply_dice_button = ttk.Button(dice_frame, text=t("apply_dice", self.lang), command=self._on_set_dice)
+        self.apply_dice_button.grid(row=0, column=2, padx=(6, 0), pady=4, sticky="ew")
+
+        action_frame = ttk.LabelFrame(control_frame, text=t("move_group", self.lang), padding=10)
+        self.move_frame = action_frame
+        action_frame.grid(row=2, column=0, sticky="nsew")
+        action_frame.columnconfigure(0, weight=1)
+        action_frame.columnconfigure(1, weight=1)
+        control_frame.rowconfigure(2, weight=1)
+
+        input_row = ttk.Frame(action_frame)
+        input_row.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        input_row.columnconfigure(0, weight=1)
+        self.input_label = ttk.Label(input_row, text=t("enter_move", self.lang))
+        self.input_label.grid(row=0, column=0, sticky="w")
+        self.move_text_entry = ttk.Entry(input_row, width=24)
+        self.move_text_entry.grid(row=1, column=0, sticky="ew", pady=4)
+        self.move_text_entry.bind("<Return>", lambda _: self._on_text_move())
+        self.apply_text_button = ttk.Button(input_row, text=t("apply", self.lang), command=self._on_text_move)
+        self.apply_text_button.grid(row=1, column=1, padx=(6, 0), pady=4, sticky="ew")
+
+        actions_buttons = ttk.Frame(action_frame)
+        actions_buttons.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        actions_buttons.columnconfigure((0, 1), weight=1)
+        self.ai_move_button = ttk.Button(actions_buttons, text=t("ai_move", self.lang), command=self._on_ai_move)
+        self.ai_move_button.grid(row=0, column=0, padx=4, sticky="ew")
+        self.copy_last_button = ttk.Button(
+            actions_buttons, text=t("copy_last", self.lang), command=self._on_copy_last_move
+        )
+        self.copy_last_button.grid(row=0, column=1, padx=4, sticky="ew")
+
+        game_frame = ttk.LabelFrame(control_frame, text=t("game_group", self.lang), padding=10)
+        self.game_frame = game_frame
+        game_frame.grid(row=3, column=0, sticky="ew", pady=(8, 8))
+        game_frame.columnconfigure(1, weight=1)
+        self.new_game_button = ttk.Button(game_frame, text=t("new_game", self.lang), command=self._on_new_game)
+        self.new_game_button.grid(row=0, column=0, padx=6, pady=4, sticky="ew")
+        self.save_wtn_button = ttk.Button(game_frame, text=t("save_wtn", self.lang), command=self._on_save_wtn)
+        self.save_wtn_button.grid(row=0, column=1, padx=6, pady=4, sticky="ew")
+
+        layout_frame = ttk.LabelFrame(control_frame, text=t("layout_group", self.lang), padding=10)
         self.layout_frame = layout_frame
-        layout_frame.grid(row=4, column=0, sticky="ew", pady=4)
-        layout_frame.columnconfigure(0, weight=1)
+        layout_frame.grid(row=4, column=0, sticky="nsew")
+        control_frame.rowconfigure(4, weight=1)
+        layout_frame.columnconfigure(1, weight=1)
+        layout_entries = ttk.Frame(layout_frame)
+        layout_entries.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 4))
+        layout_entries.columnconfigure(1, weight=1)
+        layout_entries.columnconfigure(3, weight=1)
+        self.red_layout_label = ttk.Label(layout_entries, text=t("layouts_red", self.lang))
+        self.red_layout_label.grid(row=0, column=0, sticky="w", pady=2)
+        self.red_layout_entry.grid(in_=layout_entries, row=0, column=1, sticky="ew", padx=(6, 12))
+        self.blue_layout_label = ttk.Label(layout_entries, text=t("layouts_blue", self.lang))
+        self.blue_layout_label.grid(row=1, column=0, sticky="w", pady=2)
+        self.blue_layout_entry.grid(in_=layout_entries, row=1, column=1, sticky="ew", padx=(6, 12))
+
         self.red_layout_text_label = ttk.Label(layout_frame, text=t("layout_wtn_red", self.lang))
-        self.red_layout_text_label.grid(row=0, column=0, sticky="w")
-        self.red_layout_text.grid(in_=layout_frame, row=1, column=0, columnspan=2, sticky="ew", pady=2)
+        self.red_layout_text_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.red_layout_text.grid(in_=layout_frame, row=2, column=0, columnspan=3, sticky="ew", pady=2)
         self.blue_layout_text_label = ttk.Label(layout_frame, text=t("layout_wtn_blue", self.lang))
-        self.blue_layout_text_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
-        self.blue_layout_text.grid(in_=layout_frame, row=3, column=0, columnspan=2, sticky="ew", pady=2)
+        self.blue_layout_text_label.grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self.blue_layout_text.grid(in_=layout_frame, row=4, column=0, columnspan=3, sticky="ew", pady=2)
+
         layout_buttons = ttk.Frame(layout_frame)
-        layout_buttons.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        layout_buttons.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 0))
         layout_buttons.columnconfigure((0, 1), weight=1)
         self.apply_layout_button = ttk.Button(
             layout_buttons, text=t("apply_layout", self.lang), command=self._on_apply_layouts
@@ -263,28 +367,29 @@ class EinsteinTkApp:
             layout_buttons, text=t("new_game_layout", self.lang), command=self._on_new_game_from_layout
         )
         self.new_game_layout_button.grid(row=0, column=1, padx=4, sticky="ew")
+
+        edit_tools = ttk.Frame(layout_frame)
+        edit_tools.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        edit_tools.columnconfigure(1, weight=1)
         self.edit_toggle = ttk.Checkbutton(
-            layout_frame,
+            edit_tools,
             text=t("edit_layout_mode", self.lang),
             variable=self.edit_mode_var,
             command=self._on_toggle_edit_mode,
         )
-        self.edit_toggle.grid(row=5, column=0, sticky="w", pady=(8, 0))
-        edit_tools = ttk.Frame(layout_frame)
-        edit_tools.grid(row=6, column=0, sticky="ew", pady=4)
-        edit_tools.columnconfigure(1, weight=1)
+        self.edit_toggle.grid(row=0, column=0, columnspan=2, sticky="w")
         self.edit_side_label = ttk.Label(edit_tools, text=t("edit_side", self.lang))
-        self.edit_side_label.grid(row=0, column=0, sticky="w")
+        self.edit_side_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
         self.edit_red_radio = ttk.Radiobutton(
             edit_tools, text=t("red_agent", self.lang), variable=self.edit_side_var, value="R"
         )
-        self.edit_red_radio.grid(row=0, column=1, sticky="w")
+        self.edit_red_radio.grid(row=1, column=1, sticky="w", padx=(6, 0), pady=(6, 0))
         self.edit_blue_radio = ttk.Radiobutton(
             edit_tools, text=t("blue_agent", self.lang), variable=self.edit_side_var, value="B"
         )
-        self.edit_blue_radio.grid(row=0, column=2, sticky="w", padx=(6, 0))
+        self.edit_blue_radio.grid(row=1, column=2, sticky="w", padx=(6, 0), pady=(6, 0))
         self.edit_piece_label = ttk.Label(edit_tools, text=t("edit_piece", self.lang))
-        self.edit_piece_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.edit_piece_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
         self.edit_piece_combo = ttk.Combobox(
             edit_tools,
             textvariable=self.edit_piece_var,
@@ -292,15 +397,15 @@ class EinsteinTkApp:
             state="readonly",
             width=6,
         )
-        self.edit_piece_combo.grid(row=1, column=1, sticky="w", pady=(6, 0))
+        self.edit_piece_combo.grid(row=2, column=1, sticky="w", pady=(6, 0))
         self.clear_piece_button = ttk.Button(edit_tools, text=t("clear_piece", self.lang), command=self._clear_selected_piece)
-        self.clear_piece_button.grid(row=1, column=2, padx=4, pady=(6, 0), sticky="ew")
+        self.clear_piece_button.grid(row=2, column=2, padx=4, pady=(6, 0), sticky="ew")
         self.clear_side_button = ttk.Button(edit_tools, text=t("clear_side", self.lang), command=self._clear_side)
-        self.clear_side_button.grid(row=2, column=2, padx=4, pady=4, sticky="ew")
+        self.clear_side_button.grid(row=3, column=2, padx=4, pady=4, sticky="ew")
         self.mirror_button = ttk.Button(edit_tools, text=t("mirror_layout", self.lang), command=self._mirror_layout)
-        self.mirror_button.grid(row=2, column=1, padx=4, pady=4, sticky="ew")
-        fill_frame = ttk.Frame(layout_frame)
-        fill_frame.grid(row=7, column=0, sticky="w")
+        self.mirror_button.grid(row=3, column=1, padx=4, pady=4, sticky="ew")
+        fill_frame = ttk.Frame(edit_tools)
+        fill_frame.grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
         self.auto_fill_red_check = ttk.Checkbutton(
             fill_frame, text=t("auto_fill_red", self.lang), variable=self.auto_fill_red_var
         )
@@ -310,110 +415,111 @@ class EinsteinTkApp:
         )
         self.auto_fill_blue_check.grid(row=0, column=1, sticky="w", padx=(12, 0))
 
-        mode_frame = ttk.LabelFrame(control_frame, text=t("mode_group", self.lang), padding=8)
-        self.mode_frame = mode_frame
-        mode_frame.grid(row=5, column=0, sticky="ew", pady=4)
-        mode_frame.columnconfigure((0, 1), weight=1)
-        self.mode_play_radio = ttk.Radiobutton(
-            mode_frame, text=t("mode_play", self.lang), variable=self.mode_var, value="play"
-        )
-        self.mode_play_radio.grid(row=0, column=0, sticky="w", pady=2)
-        self.mode_advise_radio = ttk.Radiobutton(
-            mode_frame, text=t("mode_advise", self.lang), variable=self.mode_var, value="advise"
-        )
-        self.mode_advise_radio.grid(row=0, column=1, sticky="w", padx=6, pady=2)
-        self.auto_apply_check = ttk.Checkbutton(mode_frame, text=t("auto_apply", self.lang), variable=self.auto_apply_var)
-        self.auto_apply_check.grid(
-            row=1, column=0, columnspan=2, sticky="w", pady=(6, 0)
-        )
+        status_frame = ttk.Frame(self.root, padding=(12, 0, 12, 6))
+        status_frame.grid(row=1, column=0, sticky="ew")
+        status_frame.columnconfigure(3, weight=1)
+        status_frame.columnconfigure(9, weight=1)
+        self.phase_heading = ttk.Label(status_frame, text=t("phase_label", self.lang), font=("TkDefaultFont", 11, "bold"))
+        self.phase_heading.grid(row=0, column=0, sticky="w")
+        self.phase_value = ttk.Label(status_frame, textvariable=self.phase_var)
+        self.phase_value.grid(row=0, column=1, sticky="w", padx=(4, 12))
+        self.next_heading = ttk.Label(status_frame, text=t("next_step_label", self.lang), font=("TkDefaultFont", 11, "bold"))
+        self.next_heading.grid(row=0, column=2, sticky="w")
+        self.next_step_label = ttk.Label(status_frame, textvariable=self.next_step_var)
+        self.next_step_label.grid(row=0, column=3, columnspan=7, sticky="w", padx=(4, 0))
 
-        dice_frame = ttk.LabelFrame(control_frame, text=t("dice_group", self.lang), padding=8)
-        self.dice_frame = dice_frame
-        dice_frame.grid(row=6, column=0, sticky="ew", pady=4)
-        dice_frame.columnconfigure((0, 1, 2, 3), weight=1)
-        self.roll_button = ttk.Button(dice_frame, text=t("roll_dice", self.lang), command=self._on_roll_dice)
-        self.roll_button.grid(row=0, column=0, padx=6, pady=4, sticky="ew")
-        self.set_dice_label = ttk.Label(dice_frame, text=t("set_dice", self.lang))
-        self.set_dice_label.grid(row=0, column=1, sticky="e")
-        self.dice_entry = ttk.Entry(dice_frame, width=10)
-        self.dice_entry.grid(row=0, column=2, sticky="ew", padx=4)
-        self.apply_dice_button = ttk.Button(dice_frame, text=t("apply", self.lang), command=self._on_set_dice)
-        self.apply_dice_button.grid(row=0, column=3, padx=6, sticky="ew")
+        self.turn_heading = ttk.Label(status_frame, text=t("info_turn", self.lang))
+        self.turn_heading.grid(row=1, column=0, sticky="w")
+        self.turn_label = ttk.Label(status_frame, textvariable=self.turn_var, font=("TkDefaultFont", 11, "bold"))
+        self.turn_label.grid(row=1, column=1, sticky="w", padx=(4, 12))
+        self.dice_heading = ttk.Label(status_frame, text=t("info_dice", self.lang))
+        self.dice_heading.grid(row=1, column=2, sticky="w")
+        self.dice_value_var = tk.StringVar(value=t("dice_label", self.lang).format(dice="-"))
+        self.dice_label = ttk.Label(status_frame, textvariable=self.dice_value_var)
+        self.dice_label.grid(row=1, column=3, sticky="w", padx=(4, 12))
+        self.can_move_heading = ttk.Label(status_frame, text=t("info_can_move", self.lang))
+        self.can_move_heading.grid(row=1, column=4, sticky="w")
+        self.can_move_label = ttk.Label(status_frame, textvariable=self.info_can_move_var)
+        self.can_move_label.grid(row=1, column=5, sticky="w", padx=(4, 12))
+        self.last_move_heading = ttk.Label(status_frame, text=t("info_last_move", self.lang))
+        self.last_move_heading.grid(row=1, column=6, sticky="w")
+        self.last_move_label = ttk.Label(status_frame, textvariable=self.last_move_var)
+        self.last_move_label.grid(row=1, column=7, sticky="w", padx=(4, 12))
+        self.status_label = ttk.Label(status_frame, textvariable=self.status_var)
+        self.status_label.grid(row=1, column=8, columnspan=2, sticky="ew")
 
-        input_frame = ttk.LabelFrame(control_frame, text=t("input_group", self.lang), padding=8)
-        self.input_frame = input_frame
-        input_frame.grid(row=7, column=0, sticky="ew", pady=4)
-        input_frame.columnconfigure(0, weight=1)
-        self.input_label = ttk.Label(input_frame, text=t("enter_move", self.lang))
-        self.input_label.grid(row=0, column=0, sticky="w")
-        self.move_text_entry = ttk.Entry(input_frame, width=24)
-        self.move_text_entry.grid(row=1, column=0, sticky="ew", pady=4)
-        self.move_text_entry.bind("<Return>", lambda _: self._on_text_move())
-        self.apply_text_button = ttk.Button(input_frame, text=t("apply", self.lang), command=self._on_text_move)
-        self.apply_text_button.grid(row=1, column=1, padx=6, pady=4, sticky="ew")
+        self.ai_suggestion_heading = ttk.Label(status_frame, text=t("info_ai_suggestion", self.lang))
+        self.ai_suggestion_heading.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.ai_suggestion_label = ttk.Label(status_frame, textvariable=self.ai_suggestion_var)
+        self.ai_suggestion_label.grid(row=2, column=1, columnspan=9, sticky="w", pady=(6, 0))
 
-        ai_frame = ttk.LabelFrame(control_frame, text=t("ai_group", self.lang), padding=8)
-        self.ai_frame = ai_frame
-        ai_frame.grid(row=8, column=0, sticky="ew", pady=4)
-        ai_frame.columnconfigure(0, weight=1)
-        self.ai_move_button = ttk.Button(ai_frame, text=t("ai_move", self.lang), command=self._on_ai_move)
-        self.ai_move_button.grid(row=0, column=0, padx=6, pady=4, sticky="ew")
-
-        info_frame = ttk.Frame(main, padding=(0, 8, 0, 0))
-        info_frame.grid(row=1, column=0, columnspan=2, sticky="nsew")
-        info_frame.columnconfigure(0, weight=1)
-        info_frame.rowconfigure(2, weight=1)
-
-        summary_frame = ttk.Frame(info_frame)
-        summary_frame.grid(row=0, column=0, sticky="ew")
-        ttk.Label(summary_frame, textvariable=self.turn_var, font=("DejaVu Sans", 12, "bold")).grid(
-            row=0, column=0, padx=(0, 12), sticky="w"
-        )
-        self.dice_label = ttk.Label(summary_frame, text=t("dice_label", self.lang).format(dice="-"))
-        self.dice_label.grid(row=0, column=1, padx=(0, 12), sticky="w")
-        self.can_move_label = ttk.Label(summary_frame, textvariable=self.info_can_move_var)
-        self.can_move_label.grid(row=0, column=2, sticky="w")
-
-        recent_frame = ttk.Frame(info_frame)
-        recent_frame.grid(row=1, column=0, sticky="ew", pady=4)
-        recent_frame.columnconfigure(1, weight=1)
-        self.last_move_label = ttk.Label(recent_frame, text=t("info_last_move", self.lang))
-        self.last_move_label.grid(row=0, column=0, sticky="w")
-        ttk.Label(recent_frame, textvariable=self.last_move_var).grid(row=0, column=1, sticky="ew")
-        ttk.Button(recent_frame, text=t("copy_last", self.lang), command=self._on_copy_last_move).grid(
-            row=0, column=2, padx=6, sticky="e"
-        )
-        self.ai_suggestion_label = ttk.Label(recent_frame, text=t("info_ai_suggestion", self.lang))
-        self.ai_suggestion_label.grid(row=1, column=0, sticky="w")
-        ttk.Label(recent_frame, textvariable=self.ai_suggestion_var).grid(row=1, column=1, sticky="ew")
-
-        log_frame = ttk.LabelFrame(info_frame, text=t("move_log", self.lang), padding=8)
+        log_frame = ttk.LabelFrame(self.root, text=t("move_log", self.lang), padding=8)
         self.log_frame = log_frame
-        log_frame.grid(row=2, column=0, sticky="nsew", pady=(6, 0))
+        log_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
         log_frame.columnconfigure(0, weight=1)
+        log_frame.rowconfigure(0, weight=1)
         log_text_frame = ttk.Frame(log_frame)
         log_text_frame.grid(row=0, column=0, sticky="nsew")
-        log_frame.rowconfigure(0, weight=1)
+        log_text_frame.columnconfigure(0, weight=1)
+        log_text_frame.rowconfigure(0, weight=1)
         scrollbar = ttk.Scrollbar(log_text_frame, orient=tk.VERTICAL)
         scrollbar.grid(row=0, column=1, sticky="ns")
         self.log_text.config(yscrollcommand=scrollbar.set)
         scrollbar.config(command=self.log_text.yview)
         self.log_text.grid(in_=log_text_frame, row=0, column=0, sticky="nsew")
-        log_text_frame.columnconfigure(0, weight=1)
-        log_text_frame.rowconfigure(0, weight=1)
+
+    def _on_board_container_resize(self, event) -> None:
+        self._request_board_resize(width=max(event.width, 0), height=max(event.height, 0))
+
+    def _request_board_resize(self, width: Optional[int] = None, height: Optional[int] = None, delay: int = 50) -> None:
+        if self._resize_after:
+            self.root.after_cancel(self._resize_after)
+
+        def redraw() -> None:
+            current_width = width if width is not None else self.board_container.winfo_width()
+            current_height = height if height is not None else self.board_container.winfo_height()
+            self._apply_board_size(current_width, current_height)
+
+        self._resize_after = self.root.after(delay, redraw)
+
+    def _apply_board_size(self, width: int, height: int) -> None:
+        self._resize_after = None
+        if width < 200 or height < 200:
+            self._request_board_resize(delay=50)
+            return
+        padding = 12
+        avail_w = max(width - padding, engine.BOARD_SIZE)
+        avail_h = max(height - padding, engine.BOARD_SIZE)
+        raw_cell = min(avail_w, avail_h) // engine.BOARD_SIZE
+        if raw_cell < 60 and min(avail_w, avail_h) >= 60 * engine.BOARD_SIZE:
+            cell = 60
+        else:
+            cell = max(24, raw_cell)
+        board_size = cell * engine.BOARD_SIZE
+        self.board_frame.place_configure(width=board_size, height=board_size)
+        self.board_frame.update_idletasks()
+
+    def _center_window(self) -> None:
+        width = self.root.winfo_width()
+        height = self.root.winfo_height()
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        offset_x = max(0, int((screen_w - width) / 2))
+        offset_y = max(0, int((screen_h - height) / 3))
+        self.root.geometry(f"{width}x{height}+{offset_x}+{offset_y}")
 
     def _refresh_texts(self) -> None:
         self.root.title(t("window_title", self.lang))
+        self.title_label.configure(text=t("window_title", self.lang))
         self.language_label.configure(text=t("language_label", self.lang))
         self.language_combo.configure(values=available_langs())
+        self.help_button.configure(text=t("help_button", self.lang))
         for frame, label in [
             (self.game_frame, "game_group"),
-            (self.agents_frame, "agents_group"),
-            (self.layout_frame, "layout_group"),
-            (self.mode_frame, "mode_group"),
+            (self.play_frame, "play_agents_group"),
             (self.dice_frame, "dice_group"),
-            (self.input_frame, "input_group"),
-            (self.ai_frame, "ai_group"),
+            (self.move_frame, "move_group"),
+            (self.layout_frame, "layout_group"),
             (self.log_frame, "move_log"),
         ]:
             frame.configure(text=t(label, self.lang))
@@ -441,15 +547,22 @@ class EinsteinTkApp:
         self.mode_advise_radio.configure(text=t("mode_advise", self.lang))
         self.auto_apply_check.configure(text=t("auto_apply", self.lang))
         self.roll_button.configure(text=t("roll_dice", self.lang))
-        self.set_dice_label.configure(text=t("set_dice", self.lang))
-        self.apply_dice_button.configure(text=t("apply", self.lang))
+        self.apply_dice_button.configure(text=t("apply_dice", self.lang))
         self.input_label.configure(text=t("enter_move", self.lang))
         self.apply_text_button.configure(text=t("apply", self.lang))
         self.ai_move_button.configure(text=t("ai_move", self.lang))
-        self.last_move_label.configure(text=t("info_last_move", self.lang))
-        self.ai_suggestion_label.configure(text=t("info_ai_suggestion", self.lang))
+        self.copy_last_button.configure(text=t("copy_last", self.lang))
+        self.phase_heading.configure(text=t("phase_label", self.lang))
+        self.next_heading.configure(text=t("next_step_label", self.lang))
+        self.turn_heading.configure(text=t("info_turn", self.lang))
+        self.dice_heading.configure(text=t("info_dice", self.lang))
+        self.can_move_heading.configure(text=t("info_can_move", self.lang))
+        self.last_move_heading.configure(text=t("info_last_move", self.lang))
+        self.ai_suggestion_heading.configure(text=t("info_ai_suggestion", self.lang))
         self.turn_var.set(t("turn_label", self.lang).format(turn=self.controller.state.turn.name))
-        self.dice_label.configure(text=t("dice_label", self.lang).format(dice=self.dice_var.get()))
+        self.dice_value_var.set(t("dice_label", self.lang).format(dice=self.dice_var.get()))
+        self.phase_var.set(t(f"phase_{self._phase}", self.lang))
+        self.next_step_var.set(t(f"next_step_{self._phase}", self.lang))
         self.log_frame.configure(text=t("move_log", self.lang))
         if not self.controller.history:
             self.last_move_var.set(t("no_last_move", self.lang))
@@ -471,6 +584,7 @@ class EinsteinTkApp:
         self.lang = self.lang_var.get()
         self._refresh_texts()
         self._refresh_board()
+        self._refresh_ui_state()
 
     def _apply_status(self, text: str, level: str) -> None:
         color_map = {
@@ -479,7 +593,9 @@ class EinsteinTkApp:
             "error": "#c62828",
             "warning": "#ef6c00",
         }
-        self.status_label.configure(foreground=color_map.get(level, "#616161"))
+        color = color_map.get(level, "#616161")
+        self.status_label.configure(foreground=color)
+        self.header_status_label.configure(foreground=color)
         self.status_var.set(text)
 
     def _set_status_key(self, key: str, level: str = "info", **fmt) -> None:
@@ -515,9 +631,112 @@ class EinsteinTkApp:
             return None
         return key
 
+    def _on_help(self) -> None:
+        tips = [
+            t("help_header", self.lang),
+            t("help_normal_game", self.lang),
+            t("help_set_dice_tip", self.lang),
+            t("help_advise_mode", self.lang),
+            t("help_custom_layout", self.lang),
+        ]
+        for line in tips:
+            self._log(line)
+        self._set_status_text(t("help_written", self.lang), level="info")
+
+    def _set_widget_state(self, widget, enabled: bool) -> None:
+        state = tk.NORMAL if enabled else tk.DISABLED
+        try:
+            widget.configure(state=state)
+        except tk.TclError:
+            try:
+                widget.state(["!disabled"] if enabled else ["disabled"])
+            except Exception:
+                pass
+
+    def _update_phase(self) -> str:
+        if self.edit_mode_var.get():
+            phase = PHASE_SETUP
+        elif engine.is_terminal(self.controller.state):
+            phase = PHASE_GAME_OVER
+        elif not self._game_started:
+            phase = PHASE_SETUP
+        elif self.controller.dice is None:
+            phase = PHASE_NEED_DICE
+        else:
+            phase = PHASE_NEED_MOVE
+        self._phase = phase
+        self.phase_var.set(t(f"phase_{phase}", self.lang))
+        self.next_step_var.set(t(f"next_step_{phase}", self.lang))
+        return phase
+
+    def _maybe_hint(self, key: Optional[str], level: str = "warning") -> None:
+        if key is None:
+            return
+        current_level = self._status_state.get("level", "info")
+        if current_level == "error" and level == "warning":
+            return
+        if self._status_state.get("key") == key:
+            return
+        self._set_status_key(key, level=level)
+
+    def _refresh_ui_state(self) -> None:
+        phase = self._update_phase()
+        self._board_block_reason = None
+        dice_enabled = phase == PHASE_NEED_DICE
+        move_enabled = phase == PHASE_NEED_MOVE
+        ai_enabled = False
+        board_enabled = move_enabled
+        reason_key: Optional[str] = None
+        dice_reason: Optional[str] = None
+        move_reason: Optional[str] = None
+        hint_level = "warning"
+
+        if phase == PHASE_SETUP:
+            board_enabled = self.edit_mode_var.get()
+            move_reason = "status_reason_need_start"
+            dice_reason = "status_reason_need_start"
+            if self.edit_mode_var.get():
+                reason_key = "status_reason_layout_edit"
+                hint_level = "info"
+        elif phase == PHASE_NEED_DICE:
+            move_reason = "status_reason_need_dice"
+        elif phase == PHASE_NEED_MOVE:
+            dice_reason = "status_reason_need_move"
+            agent = self.controller.red_agent if self.controller.state.turn is Player.RED else self.controller.blue_agent
+            ai_enabled = self.mode_var.get() == "advise" or agent is not None
+            if self._is_ai_turn():
+                board_enabled = False
+                reason_key = "status_reason_ai_turn"
+        elif phase == PHASE_GAME_OVER:
+            board_enabled = False
+            dice_enabled = False
+            move_enabled = False
+            reason_key = "status_reason_game_over"
+            dice_reason = reason_key
+            move_reason = reason_key
+
+        if phase == PHASE_NEED_MOVE:
+            hint_level = "info"
+        block_reason = reason_key or move_reason or dice_reason
+        self._board_block_reason = None if board_enabled or self.edit_mode_var.get() else block_reason
+
+        for widget in [self.roll_button, self.apply_dice_button, self.dice_entry]:
+            self._set_widget_state(widget, dice_enabled)
+        for widget in [self.move_text_entry, self.apply_text_button]:
+            self._set_widget_state(widget, move_enabled)
+        self._set_widget_state(self.ai_move_button, move_enabled and ai_enabled)
+        self._set_widget_state(self.copy_last_button, phase != PHASE_SETUP)
+
+        for row in self.board_buttons:
+            for btn in row:
+                self._set_widget_state(btn, board_enabled or self.edit_mode_var.get())
+
+        self._maybe_hint(block_reason, level=hint_level)
+
     def _on_agents_changed(self) -> None:
         self._log(t("agents_changed", self.lang))
         self._set_status_key("agents_changed")
+        self._refresh_ui_state()
 
     def _on_new_game(self) -> None:
         try:
@@ -533,10 +752,13 @@ class EinsteinTkApp:
             return
         self.selected = None
         self._clear_highlights()
+        self.edit_mode_var.set(False)
         self._refresh_board()
         self.last_move_var.set(t("no_last_move", self.lang))
         self.ai_suggestion_var.set(t("no_last_move", self.lang))
         self._ai_suggestion_empty = True
+        self._game_started = True
+        self._refresh_ui_state()
         self._set_status_key("new_game_started", level="success")
         self._log(t("new_game_started", self.lang))
 
@@ -595,14 +817,24 @@ class EinsteinTkApp:
             return
         self.selected = None
         self._clear_highlights()
+        self.edit_mode_var.set(False)
         self._refresh_board()
         self.last_move_var.set(t("no_last_move", self.lang))
         self.ai_suggestion_var.set(t("no_last_move", self.lang))
         self._ai_suggestion_empty = True
+        self._game_started = True
+        self._refresh_ui_state()
         self._set_status_key("layout_started", level="success")
         self._log(t("layout_started", self.lang))
 
     def _on_roll_dice(self) -> None:
+        self._refresh_ui_state()
+        if self._phase != PHASE_NEED_DICE:
+            reason = "status_reason_need_start" if self._phase == PHASE_SETUP else "status_reason_need_move"
+            if self._phase == PHASE_GAME_OVER:
+                reason = "status_reason_game_over"
+            self._maybe_hint(reason)
+            return
         value = self.controller.roll_dice(random.Random())
         self._update_dice(value)
         self._clear_selection_state()
@@ -612,19 +844,30 @@ class EinsteinTkApp:
     def _on_set_dice(self) -> None:
         raw = self.dice_entry.get().strip()
         if not raw:
+            self._set_status_key("invalid_dice", level="error")
+            return
+        self._refresh_ui_state()
+        if self._phase != PHASE_NEED_DICE:
+            reason = "status_reason_need_start" if self._phase == PHASE_SETUP else "status_reason_need_move"
+            if self._phase == PHASE_GAME_OVER:
+                reason = "status_reason_game_over"
+                self._maybe_hint(reason, level="error")
+            else:
+                self._maybe_hint(reason)
             return
         try:
             value = int(raw)
+            if value < 1 or value > 6:
+                raise ValueError(t("invalid_dice", self.lang))
             self.controller.set_dice(value)
             self._update_dice(value)
         except Exception as exc:
-            messagebox.showerror(t("dice_group", self.lang), t("illegal_move", self.lang).format(reason=exc))
             mapped = self._status_for_exception(exc)
             if mapped:
                 key, fmt = mapped
                 self._set_status_key(key, level="error", **fmt)
             else:
-                self._set_status_text(t("status_error_prefix", self.lang).format(msg=exc), level="error")
+                self._set_status_text(t("invalid_dice", self.lang), level="error")
             return
         self._clear_selection_state()
         self._update_move_hints()
@@ -634,6 +877,16 @@ class EinsteinTkApp:
         text = self.move_text_entry.get().strip()
         if not text:
             return
+        self._refresh_ui_state()
+        if self.edit_mode_var.get():
+            self._maybe_hint("status_reason_layout_edit")
+            return
+        if self._phase != PHASE_NEED_MOVE:
+            reason = "status_reason_need_dice" if self._phase == PHASE_NEED_DICE else "status_reason_need_start"
+            if self._phase == PHASE_GAME_OVER:
+                reason = "status_reason_game_over"
+            self._maybe_hint(reason)
+            return
         if engine.is_terminal(self.controller.state):
             self._log(t("game_over", self.lang))
             return
@@ -642,7 +895,6 @@ class EinsteinTkApp:
             self._set_status_key("ai_turn_wait", level="warning")
             return
         if self.controller.dice is None:
-            messagebox.showinfo(t("dice_group", self.lang), t("dice_needed", self.lang))
             self._set_status_key("status_need_dice", level="warning")
             return
         try:
@@ -665,16 +917,26 @@ class EinsteinTkApp:
         self._set_status_key("status_move_applied", level="success")
 
     def _on_ai_move(self) -> None:
-        if self.controller.dice is None:
-            messagebox.showinfo(t("dice_group", self.lang), t("dice_needed", self.lang))
-            self._set_status_key("status_need_dice", level="warning")
+        self._refresh_ui_state()
+        if self.edit_mode_var.get():
+            self._maybe_hint("status_reason_layout_edit")
+            return
+        if self._phase != PHASE_NEED_MOVE:
+            reason = "status_reason_need_dice" if self._phase == PHASE_NEED_DICE else "status_reason_need_start"
+            if self._phase == PHASE_GAME_OVER:
+                reason = "status_reason_game_over"
+            self._maybe_hint(reason)
             return
         agent = self.controller.red_agent if self.controller.state.turn is Player.RED else self.controller.blue_agent
         apply_move = self.mode_var.get() == "play" or self.auto_apply_var.get()
         if agent is None:
-            messagebox.showinfo(t("mode_group", self.lang), t("human_turn", self.lang))
             self._set_status_key("human_turn")
             return
+        self._set_status_key("ai_thinking", level="info")
+        self.root.update_idletasks()
+        self.root.after(10, lambda: self._do_ai_move(apply_move))
+
+    def _do_ai_move(self, apply_move: bool) -> None:
         move = self.controller.compute_ai_move(time_budget_ms=200)
         if apply_move:
             self.controller._apply_move(move)
@@ -715,8 +977,18 @@ class EinsteinTkApp:
         self._set_status_key("copy_done", level="success")
 
     def _on_square_click(self, r: int, c: int) -> None:
+        self._refresh_ui_state()
         if self.edit_mode_var.get():
             self._on_edit_square_click(r, c)
+            return
+        if self._board_block_reason:
+            self._maybe_hint(self._board_block_reason)
+            return
+        if self._phase != PHASE_NEED_MOVE:
+            reason = "status_reason_need_dice" if self._phase == PHASE_NEED_DICE else "status_reason_need_start"
+            if self._phase == PHASE_GAME_OVER:
+                reason = "status_reason_game_over"
+            self._maybe_hint(reason)
             return
         if engine.is_terminal(self.controller.state):
             self._log(t("game_over", self.lang))
@@ -725,10 +997,6 @@ class EinsteinTkApp:
         if self._is_ai_turn():
             self._log(t("ai_turn_wait", self.lang))
             self._set_status_key("ai_turn_wait", level="warning")
-            return
-        if self.controller.dice is None:
-            messagebox.showinfo(t("dice_group", self.lang), t("dice_needed", self.lang))
-            self._set_status_key("status_need_dice", level="warning")
             return
         cell_value = self.controller.state.board[r][c]
         turn = self.controller.state.turn
@@ -743,7 +1011,6 @@ class EinsteinTkApp:
             try:
                 destinations = self._legal_destinations_for_cell(r, c)
             except ValueError as exc:
-                messagebox.showerror(t("game_group", self.lang), str(exc))
                 mapped = self._status_for_exception(exc)
                 if mapped:
                     key, fmt = mapped
@@ -792,6 +1059,7 @@ class EinsteinTkApp:
             self._set_status_key("layout_edit_on")
         else:
             self._set_status_key("status_ready")
+        self._refresh_ui_state()
 
     def _on_edit_square_click(self, r: int, c: int) -> None:
         side = self.edit_side_var.get()
@@ -872,6 +1140,7 @@ class EinsteinTkApp:
         self._update_turn()
         self._clear_highlights()
         self._set_status_key("status_move_applied", level="success")
+        self._refresh_ui_state()
         if engine.is_terminal(self.controller.state):
             win = engine.winner(self.controller.state)
             winner_text = win.name if win else "-"
@@ -1000,7 +1269,8 @@ class EinsteinTkApp:
 
     def _update_dice(self, value: int) -> None:
         self.dice_var.set(str(value))
-        self.dice_label.config(text=t("dice_label", self.lang).format(dice=value))
+        self.dice_value_var.set(t("dice_label", self.lang).format(dice=value))
+        self._refresh_ui_state()
         self._maybe_auto_step_ai()
 
     def _update_move_hints(self) -> None:
@@ -1008,18 +1278,18 @@ class EinsteinTkApp:
             self.info_can_move_var.set(t("layout_edit_hint", self.lang))
             return
         if self.controller.dice is None:
-            self.info_can_move_var.set(t("info_can_move", self.lang) + ": -")
+            self.info_can_move_var.set("-")
             return
         try:
             legal = self.controller.legal_moves()
         except Exception:
-            self.info_can_move_var.set(t("info_can_move", self.lang) + ": -")
+            self.info_can_move_var.set("-")
             return
         pieces = sorted({mv.piece_id for mv in legal})
         if pieces:
-            detail = t("you_can_move", self.lang).format(pieces=", ".join(str(p) for p in pieces))
+            detail = ", ".join(str(p) for p in pieces)
         else:
-            detail = t("info_can_move", self.lang) + ": -"
+            detail = "-"
         dice_value = self.controller.dice
         if dice_value is not None and dice_value not in pieces and pieces:
             nearest = min(pieces, key=lambda p: abs(p - dice_value))
