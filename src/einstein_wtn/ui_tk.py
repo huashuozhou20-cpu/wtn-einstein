@@ -64,8 +64,7 @@ class EinsteinTkApp:
         self.root = tk.Tk()
         font_family, has_cjk_font, base_size = self._configure_fonts()
         self.root.title(t("window_title", self.lang))
-        self.root.geometry("1200x820")
-        self.root.minsize(1100, 760)
+        self._apply_initial_geometry()
         self.has_cjk_font = has_cjk_font
         piece_font = (font_family, base_size + 5, "bold")
 
@@ -176,22 +175,12 @@ class EinsteinTkApp:
         raise ValueError(f"Unknown agent '{name}'")
 
     def _build_board_area(self, parent: ttk.Frame, piece_font) -> None:
-        board_outer = ttk.Frame(parent)
-        board_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        board_outer.columnconfigure(0, weight=1)
-        board_outer.rowconfigure(0, weight=1)
-
-        self.board_container = ttk.Frame(board_outer)
-        self.board_container.grid(row=0, column=0, sticky="nsew")
-        self.board_container.columnconfigure(0, weight=1)
-        self.board_container.rowconfigure(0, weight=1)
-        self._resize_after: Optional[str] = None
-        self.board_container.bind("<Configure>", self._on_board_area_resize)
-
-        board_frame = ttk.Frame(self.board_container, padding=6, borderwidth=1, relief=tk.SOLID)
+        board_frame = ttk.Frame(parent, padding=6, borderwidth=1, relief=tk.SOLID)
         self.board_frame = board_frame
-        board_frame.place(relx=0.5, rely=0.5, anchor="center")
+        board_frame.grid(row=0, column=0, sticky="nsew", padx=12, pady=8)
         board_frame.grid_propagate(False)
+        board_frame.configure(width=600, height=600)
+        self._resize_after: Optional[str] = None
         board_frame.bind("<Configure>", self._on_board_area_resize)
         for idx in range(engine.BOARD_SIZE):
             board_frame.columnconfigure(idx, weight=1, uniform="board")
@@ -213,12 +202,33 @@ class EinsteinTkApp:
             self.board_buttons.append(row_buttons)
 
     def _build_control_panel(self, parent: ttk.Frame, piece_font) -> None:
-        control_frame = ttk.Frame(parent, padding=(0, 0, 0, 0))
+        control_container = ttk.Frame(parent, padding=(0, 0, 0, 0))
+        control_container.grid(row=0, column=1, sticky="nsew", padx=12, pady=8)
+        control_container.columnconfigure(0, weight=1, minsize=420)
+        control_container.rowconfigure(0, weight=1)
+
+        control_canvas = tk.Canvas(control_container, highlightthickness=0)
+        control_canvas.grid(row=0, column=0, sticky="nsew")
+        control_scroll = ttk.Scrollbar(control_container, orient="vertical", command=control_canvas.yview)
+        control_scroll.grid(row=0, column=1, sticky="ns")
+        control_canvas.configure(yscrollcommand=control_scroll.set)
+
+        control_frame = ttk.Frame(control_canvas, padding=(0, 0, 0, 0))
         self.control_frame = control_frame
-        control_frame.grid(row=0, column=1, sticky="ns", padx=12, pady=8)
         control_frame.columnconfigure(0, weight=1, minsize=420)
-        control_frame.grid_propagate(False)
-        control_frame.configure(width=420)
+        window_id = control_canvas.create_window((0, 0), window=control_frame, anchor="nw")
+
+        def _sync_scrollregion(event=None) -> None:
+            control_canvas.configure(scrollregion=control_canvas.bbox("all"))
+            try:
+                control_canvas.itemconfigure(window_id, width=control_canvas.winfo_width())
+            except Exception:
+                pass
+
+        control_frame.bind("<Configure>", _sync_scrollregion)
+        control_canvas.bind("<Configure>", _sync_scrollregion)
+        self._bind_mousewheel(control_canvas, control_canvas)
+        self._bind_mousewheel(control_frame, control_canvas)
 
         play_frame = ttk.LabelFrame(control_frame, text=t("play_agents_group", self.lang), padding=10)
         self.play_frame = play_frame
@@ -404,23 +414,30 @@ class EinsteinTkApp:
 
     def _layout_widgets(self, piece_font) -> None:
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=0)
-        self.root.rowconfigure(2, weight=1)
+        self.root.rowconfigure(0, weight=0)
+        self.root.rowconfigure(1, weight=1)
 
-        content_frame = ttk.Frame(self.root)
-        content_frame.grid(row=0, column=0, sticky="nsew")
-        content_frame.columnconfigure(0, weight=1)
-        content_frame.rowconfigure(0, weight=0)
-        content_frame.rowconfigure(1, weight=1)
-
-        header_frame = ttk.Frame(content_frame, padding=(12, 12, 12, 6))
-        header_frame.grid(row=0, column=0, sticky="ew")
-        header_frame.columnconfigure(1, weight=1)
-        self.title_label = ttk.Label(header_frame, text=t("window_title", self.lang), font=("TkDefaultFont", 14, "bold"))
+        nav_frame = ttk.Frame(self.root, padding=(12, 12, 12, 6))
+        nav_frame.grid(row=0, column=0, sticky="ew")
+        for idx in range(7):
+            nav_frame.columnconfigure(idx, weight=0)
+        nav_frame.columnconfigure(7, weight=1)
+        self.title_label = ttk.Label(nav_frame, text=t("window_title", self.lang), font=("TkDefaultFont", 14, "bold"))
         self.title_label.grid(row=0, column=0, sticky="w")
-        language_wrap = ttk.Frame(header_frame)
-        language_wrap.grid(row=0, column=1, sticky="e")
+        self.nav_buttons = {}
+        nav_names = [
+            ("home", "Home"),
+            ("play", "Play"),
+            ("layout", "Layout"),
+            ("settings", "Settings"),
+            ("help", "Help"),
+        ]
+        for idx, (name, label) in enumerate(nav_names, start=1):
+            btn = ttk.Button(nav_frame, text=label, command=lambda n=name: self.show_screen(n))
+            btn.grid(row=0, column=idx, padx=(6, 0))
+            self.nav_buttons[name] = btn
+        language_wrap = ttk.Frame(nav_frame)
+        language_wrap.grid(row=0, column=7, sticky="e")
         language_wrap.columnconfigure(1, weight=1)
         self.language_label = ttk.Label(language_wrap, text=t("language_label", self.lang))
         self.language_label.grid(row=0, column=0, sticky="e", padx=(0, 6))
@@ -433,22 +450,70 @@ class EinsteinTkApp:
         )
         self.language_combo.grid(row=0, column=1, sticky="e")
         self.language_combo.bind("<<ComboboxSelected>>", lambda _: self._on_language_changed())
-        self.help_button = ttk.Button(header_frame, text=t("help_button", self.lang), command=self._on_help)
-        self.help_button.grid(row=0, column=2, sticky="e")
-        self.header_status_label = ttk.Label(header_frame, textvariable=self.status_var)
-        self.header_status_label.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        self.header_status_label = ttk.Label(nav_frame, textvariable=self.status_var)
+        self.header_status_label.grid(row=1, column=0, columnspan=8, sticky="ew", pady=(6, 0))
 
-        main_frame = ttk.Frame(content_frame, padding=(12, 6, 12, 6))
-        main_frame.grid(row=1, column=0, sticky="nsew")
-        main_frame.columnconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=0, minsize=420)
-        main_frame.rowconfigure(0, weight=1)
+        self.screen_container = ttk.Frame(self.root)
+        self.screen_container.grid(row=1, column=0, sticky="nsew")
+        self.screen_container.columnconfigure(0, weight=1)
+        self.screen_container.rowconfigure(0, weight=1)
 
-        self._build_board_area(main_frame, piece_font)
-        self._build_control_panel(main_frame, piece_font)
+        self.screen_home = ttk.Frame(self.screen_container, padding=20)
+        self.screen_play = ttk.Frame(self.screen_container)
+        self.screen_layout = ttk.Frame(self.screen_container)
+        self.screen_settings = ttk.Frame(self.screen_container, padding=20)
+        self.screen_help = ttk.Frame(self.screen_container, padding=20)
+        for frame in (
+            self.screen_home,
+            self.screen_play,
+            self.screen_layout,
+            self.screen_settings,
+            self.screen_help,
+        ):
+            frame.grid(row=0, column=0, sticky="nsew")
 
-        status_frame = ttk.Frame(self.root, padding=(12, 0, 12, 6))
-        status_frame.grid(row=1, column=0, sticky="ew")
+        self._build_home_screen()
+        self._build_play_screen(piece_font)
+        self._build_layout_screen()
+        self._build_settings_screen()
+        self._build_help_screen()
+        self.show_screen("home")
+
+    def _build_home_screen(self) -> None:
+        self.screen_home.columnconfigure(0, weight=1)
+        welcome = ttk.Label(
+            self.screen_home,
+            text=t("window_title", self.lang),
+            font=("TkDefaultFont", 18, "bold"),
+        )
+        welcome.grid(row=0, column=0, sticky="w", pady=(0, 12))
+        blurb = ttk.Label(
+            self.screen_home,
+            text="Select Play to start a match, Layout to edit starting positions, or Settings to adjust defaults.",
+            wraplength=900,
+            justify=tk.LEFT,
+        )
+        blurb.grid(row=1, column=0, sticky="w")
+        start_btn = ttk.Button(self.screen_home, text="Start Playing", command=lambda: self.show_screen("play"))
+        start_btn.grid(row=2, column=0, sticky="w", pady=(16, 0))
+
+    def _build_play_screen(self, piece_font) -> None:
+        self.screen_play.columnconfigure(0, weight=1)
+        self.screen_play.rowconfigure(1, weight=1)
+        heading = ttk.Label(self.screen_play, text="Play", font=("TkDefaultFont", 14, "bold"))
+        heading.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 0))
+
+        play_area = ttk.Frame(self.screen_play, padding=(12, 6, 12, 6))
+        play_area.grid(row=1, column=0, sticky="nsew")
+        play_area.rowconfigure(0, weight=1)
+        play_area.columnconfigure(0, weight=1)
+        play_area.columnconfigure(1, weight=0, minsize=420)
+
+        self._build_board_area(play_area, piece_font)
+        self._build_control_panel(play_area, piece_font)
+
+        status_frame = ttk.Frame(self.screen_play, padding=(12, 0, 12, 6))
+        status_frame.grid(row=2, column=0, sticky="ew")
         status_frame.columnconfigure(3, weight=1)
         status_frame.columnconfigure(9, weight=1)
         self.phase_heading = ttk.Label(status_frame, text=t("phase_label", self.lang), font=("TkDefaultFont", 11, "bold"))
@@ -485,9 +550,9 @@ class EinsteinTkApp:
         self.ai_suggestion_label = ttk.Label(status_frame, textvariable=self.ai_suggestion_var)
         self.ai_suggestion_label.grid(row=2, column=1, columnspan=9, sticky="w", pady=(6, 0))
 
-        log_frame = ttk.LabelFrame(self.root, text=t("move_log", self.lang), padding=8)
+        log_frame = ttk.LabelFrame(self.screen_play, text=t("move_log", self.lang), padding=8)
         self.log_frame = log_frame
-        log_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        log_frame.grid(row=3, column=0, sticky="nsew", padx=12, pady=(0, 12))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         log_text_frame = ttk.Frame(log_frame)
@@ -500,8 +565,175 @@ class EinsteinTkApp:
         scrollbar.config(command=self.log_text.yview)
         self.log_text.grid(in_=log_text_frame, row=0, column=0, sticky="nsew")
 
+    def _build_layout_screen(self) -> None:
+        self.screen_layout.columnconfigure(0, weight=1, minsize=1100)
+        self.screen_layout.rowconfigure(1, weight=1)
+        heading = ttk.Label(self.screen_layout, text="Layout", font=("TkDefaultFont", 14, "bold"))
+        heading.grid(row=0, column=0, sticky="w", padx=12, pady=(12, 0))
+        layout_wrapper = ttk.Frame(self.screen_layout, padding=(12, 6, 12, 12))
+        layout_wrapper.grid(row=1, column=0, sticky="nsew")
+        layout_wrapper.columnconfigure(0, weight=1)
+
+        layout_frame = ttk.LabelFrame(layout_wrapper, text=t("layout_group", self.lang), padding=10)
+        self.layout_frame = layout_frame
+        layout_frame.grid(row=0, column=0, sticky="nsew")
+        layout_frame.columnconfigure(1, weight=1)
+        layout_frame.columnconfigure(3, weight=1)
+        layout_entries = ttk.Frame(layout_frame)
+        layout_entries.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 4))
+        layout_entries.columnconfigure(1, weight=1)
+        layout_entries.columnconfigure(3, weight=1)
+        self.red_layout_label = ttk.Label(layout_entries, text=t("layouts_red", self.lang))
+        self.red_layout_label.grid(row=0, column=0, sticky="w", pady=2)
+        self.red_layout_entry.grid(in_=layout_entries, row=0, column=1, sticky="ew", padx=(6, 12))
+        self.blue_layout_label = ttk.Label(layout_entries, text=t("layouts_blue", self.lang))
+        self.blue_layout_label.grid(row=1, column=0, sticky="w", pady=2)
+        self.blue_layout_entry.grid(in_=layout_entries, row=1, column=1, sticky="ew", padx=(6, 12))
+
+        self.red_layout_text_label = ttk.Label(layout_frame, text=t("layout_wtn_red", self.lang))
+        self.red_layout_text_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.red_layout_text.grid(in_=layout_frame, row=2, column=0, columnspan=3, sticky="ew", pady=2)
+        self.blue_layout_text_label = ttk.Label(layout_frame, text=t("layout_wtn_blue", self.lang))
+        self.blue_layout_text_label.grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self.blue_layout_text.grid(in_=layout_frame, row=4, column=0, columnspan=3, sticky="ew", pady=2)
+
+        layout_buttons = ttk.Frame(layout_frame)
+        layout_buttons.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(6, 0))
+        layout_buttons.columnconfigure((0, 1), weight=1)
+        self.apply_layout_button = ttk.Button(
+            layout_buttons, text=t("apply_layout", self.lang), command=self._on_apply_layouts
+        )
+        self.apply_layout_button.grid(row=0, column=0, padx=4, sticky="ew")
+        self.new_game_layout_button = ttk.Button(
+            layout_buttons, text=t("new_game_layout", self.lang), command=self._on_new_game_from_layout
+        )
+        self.new_game_layout_button.grid(row=0, column=1, padx=4, sticky="ew")
+
+        edit_tools = ttk.Frame(layout_frame)
+        edit_tools.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        edit_tools.columnconfigure(1, weight=1)
+        self.edit_toggle = ttk.Checkbutton(
+            edit_tools,
+            text=t("edit_layout_mode", self.lang),
+            variable=self.edit_mode_var,
+            command=self._on_toggle_edit_mode,
+        )
+        self.edit_toggle.grid(row=0, column=0, columnspan=2, sticky="w")
+        self.edit_side_label = ttk.Label(edit_tools, text=t("edit_side", self.lang))
+        self.edit_side_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.edit_red_radio = ttk.Radiobutton(
+            edit_tools, text=t("red_agent", self.lang), variable=self.edit_side_var, value="R", command=self._on_edit_side
+        )
+        self.edit_red_radio.grid(row=1, column=1, sticky="w", pady=(6, 0))
+        self.edit_blue_radio = ttk.Radiobutton(
+            edit_tools, text=t("blue_agent", self.lang), variable=self.edit_side_var, value="B", command=self._on_edit_side
+        )
+        self.edit_blue_radio.grid(row=1, column=2, sticky="w", pady=(6, 0))
+        self.edit_piece_label = ttk.Label(edit_tools, text=t("edit_piece", self.lang))
+        self.edit_piece_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.edit_piece_combo = ttk.Combobox(
+            edit_tools,
+            textvariable=self.edit_piece_var,
+            values=[str(i) for i in range(1, 7)],
+            state="readonly",
+            width=6,
+        )
+        self.edit_piece_combo.grid(row=2, column=1, sticky="w", pady=(6, 0))
+        self.clear_piece_button = ttk.Button(edit_tools, text=t("clear_piece", self.lang), command=self._clear_selected_piece)
+        self.clear_piece_button.grid(row=2, column=2, padx=4, pady=(6, 0), sticky="ew")
+        self.clear_side_button = ttk.Button(edit_tools, text=t("clear_side", self.lang), command=self._clear_side)
+        self.clear_side_button.grid(row=3, column=2, padx=4, pady=4, sticky="ew")
+        self.mirror_button = ttk.Button(edit_tools, text=t("mirror_layout", self.lang), command=self._mirror_layout)
+        self.mirror_button.grid(row=3, column=1, padx=4, pady=4, sticky="ew")
+        fill_frame = ttk.Frame(edit_tools)
+        fill_frame.grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.auto_fill_red_check = ttk.Checkbutton(
+            fill_frame, text=t("auto_fill_red", self.lang), variable=self.auto_fill_red_var
+        )
+        self.auto_fill_red_check.grid(row=0, column=0, sticky="w")
+        self.auto_fill_blue_check = ttk.Checkbutton(
+            fill_frame, text=t("auto_fill_blue", self.lang), variable=self.auto_fill_blue_var
+        )
+        self.auto_fill_blue_check.grid(row=0, column=1, sticky="w", padx=(12, 0))
+
+    def _build_settings_screen(self) -> None:
+        self.default_agent_red = tk.StringVar(value=self.agent_var_red.get())
+        self.default_agent_blue = tk.StringVar(value=self.agent_var_blue.get())
+        heading = ttk.Label(self.screen_settings, text="Settings", font=("TkDefaultFont", 14, "bold"))
+        heading.grid(row=0, column=0, sticky="w", pady=(0, 12))
+        grid = ttk.Frame(self.screen_settings)
+        grid.grid(row=1, column=0, sticky="nsew")
+        grid.columnconfigure(1, weight=1)
+
+        size_label = ttk.Label(grid, text="Window size presets")
+        size_label.grid(row=0, column=0, sticky="w", pady=4)
+        size_buttons = ttk.Frame(grid)
+        size_buttons.grid(row=0, column=1, sticky="w", pady=4)
+        for text, dims in [("1150x800", (1150, 800)), ("1300x900", (1300, 900)), ("1400x950", (1400, 950))]:
+            btn = ttk.Button(size_buttons, text=text, command=lambda d=dims: self._apply_window_preset(*d))
+            btn.pack(side=tk.LEFT, padx=4)
+        maximize_btn = ttk.Button(size_buttons, text="Maximize", command=self._maximize_window)
+        maximize_btn.pack(side=tk.LEFT, padx=4)
+
+        auto_apply = ttk.Checkbutton(grid, text="Auto-apply advice", variable=self.auto_apply_var)
+        auto_apply.grid(row=1, column=0, columnspan=2, sticky="w", pady=6)
+
+        agent_defaults = ttk.LabelFrame(grid, text="Default agents", padding=8)
+        agent_defaults.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        agent_defaults.columnconfigure(1, weight=1)
+        ttk.Label(agent_defaults, text="Red").grid(row=0, column=0, sticky="w")
+        ttk.OptionMenu(
+            agent_defaults,
+            self.default_agent_red,
+            self.default_agent_red.get(),
+            *[label for label, _ in AGENT_CHOICES],
+        ).grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        ttk.Label(agent_defaults, text="Blue").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.OptionMenu(
+            agent_defaults,
+            self.default_agent_blue,
+            self.default_agent_blue.get(),
+            *[label for label, _ in AGENT_CHOICES],
+        ).grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(6, 0))
+
+    def _build_help_screen(self) -> None:
+        heading = ttk.Label(self.screen_help, text="Help", font=("TkDefaultFont", 14, "bold"))
+        heading.grid(row=0, column=0, sticky="w", pady=(0, 12))
+        tips_text = tk.Text(self.screen_help, height=16, wrap=tk.WORD)
+        tips_text.grid(row=1, column=0, sticky="nsew")
+        self.screen_help.rowconfigure(1, weight=1)
+        self.screen_help.columnconfigure(0, weight=1)
+        help_lines = [
+            "Use Play to roll dice, enter moves, and view advice.",
+            "Move format: (R1,bc) where color+id goes to coord.",
+            "Dice rules: roll selects piece id; nearest surviving id may move if rolled piece is captured.",
+            "Layout: switch to Layout screen to edit starting positions and save new WTN layouts.",
+        ]
+        tips_text.insert("1.0", "\n".join(help_lines))
+        tips_text.configure(state=tk.DISABLED)
+
+    def show_screen(self, name: str) -> None:
+        screens = {
+            "home": self.screen_home,
+            "play": self.screen_play,
+            "layout": self.screen_layout,
+            "settings": self.screen_settings,
+            "help": self.screen_help,
+        }
+        target = screens.get(name, self.screen_home)
+        target.tkraise()
+        self.current_screen = name
+        for nav_name, btn in self.nav_buttons.items():
+            try:
+                btn.state(["pressed"] if nav_name == name else ["!pressed"])
+            except Exception:
+                pass
+
     def _run_ui_contract_check(self, stabilized_size: Optional[Tuple[int, int]] = None) -> List[str]:
         errors: List[str] = []
+        previous_screen = getattr(self, "current_screen", "home")
+        if previous_screen != "play":
+            self.show_screen("play")
         for attr in REQUIRED_WIDGET_ATTRS:
             if not hasattr(self, attr):
                 errors.append(f"missing attribute '{attr}'")
@@ -556,15 +788,31 @@ class EinsteinTkApp:
             except Exception:
                 width = height = 0
 
+        try:
+            req_width = self.board_frame.winfo_reqwidth()
+            req_height = self.board_frame.winfo_reqheight()
+        except Exception:
+            req_width = req_height = 0
+
         if width is None or height is None:
             errors.append("board_frame size unavailable")
-        elif width < 300 or height < 300:
-            errors.append(f"board_frame too small ({width}x{height})")
+        else:
+            actual_small = width < 300 or height < 300
+            req_small = req_width < 300 or req_height < 300
+            if actual_small and req_small:
+                errors.append(
+                    f"board_frame too small ({width}x{height}), req=({req_width}x{req_height})"
+                )
 
+        if previous_screen != "play":
+            self.show_screen(previous_screen)
         return errors
 
     def _stabilize_layout(self, attempts: int = 50, sleep: float = 0.0) -> None:
         """Pump the event loop until the board has usable space."""
+        previous_screen = getattr(self, "current_screen", "home")
+        if previous_screen != "play":
+            self.show_screen("play")
 
         for _ in range(attempts):
             self.root.update_idletasks()
@@ -579,6 +827,8 @@ class EinsteinTkApp:
             if sleep:
                 time.sleep(sleep)
         self._request_board_resize(delay=0)
+        if previous_screen != "play":
+            self.show_screen(previous_screen)
 
     def _on_board_area_resize(self, event) -> None:
         self._request_board_resize(width=max(event.width, 0), height=max(event.height, 0))
@@ -588,12 +838,10 @@ class EinsteinTkApp:
             self.root.after_cancel(self._resize_after)
 
         def redraw() -> None:
-            container_w = self.board_container.winfo_width()
-            container_h = self.board_container.winfo_height()
             frame_w = self.board_frame.winfo_width()
             frame_h = self.board_frame.winfo_height()
-            current_width = width if width is not None else max(container_w, frame_w)
-            current_height = height if height is not None else max(container_h, frame_h)
+            current_width = width if width is not None else frame_w
+            current_height = height if height is not None else frame_h
             if current_width < 120 or current_height < 120:
                 self._request_board_resize(delay=100)
                 return
@@ -615,7 +863,7 @@ class EinsteinTkApp:
         else:
             cell = max(24, raw_cell)
         board_size = cell * engine.BOARD_SIZE
-        self.board_frame.place_configure(width=board_size, height=board_size)
+        self.board_frame.configure(width=board_size, height=board_size)
         self.board_frame.update_idletasks()
 
     def _center_window(self) -> None:
@@ -627,12 +875,61 @@ class EinsteinTkApp:
         offset_y = max(0, int((screen_h - height) / 3))
         self.root.geometry(f"{width}x{height}+{offset_x}+{offset_y}")
 
+    def _apply_window_preset(self, width: int, height: int) -> None:
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        clamped_w = min(width, max(900, screen_w - 40))
+        clamped_h = min(height, max(700, screen_h - 80))
+        self.root.geometry(f"{clamped_w}x{clamped_h}")
+        min_w = min(clamped_w, max(900, screen_w - 80))
+        min_h = min(clamped_h, max(700, screen_h - 120))
+        self.root.minsize(min_w, min_h)
+        self._center_window()
+
+    def _apply_initial_geometry(self) -> None:
+        presets = [(1300, 900), (1250, 860), (1200, 820), (1150, 800), (1100, 760)]
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        usable_w = max(960, screen_w - 80)
+        usable_h = max(720, screen_h - 120)
+        selected_w, selected_h = presets[-1]
+        for w, h in presets:
+            if w <= usable_w and h <= usable_h:
+                selected_w, selected_h = w, h
+                break
+        selected_w = min(selected_w, usable_w)
+        selected_h = min(selected_h, usable_h)
+        self.root.geometry(f"{selected_w}x{selected_h}")
+        self.root.minsize(min(selected_w, usable_w), min(selected_h, usable_h))
+
+    def _maximize_window(self) -> None:
+        try:
+            self.root.state("zoomed")
+        except Exception:
+            try:
+                self.root.attributes("-zoomed", True)
+            except Exception:
+                screen_w = self.root.winfo_screenwidth()
+                screen_h = self.root.winfo_screenheight()
+                self.root.geometry(f"{screen_w}x{screen_h}+0+0")
+                self.root.update_idletasks()
+
+    def _bind_mousewheel(self, widget: tk.Misc, target_canvas: tk.Canvas) -> None:
+        def _on_mousewheel(event):
+            if event.delta:
+                target_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            elif getattr(event, "num", None) in (4, 5):
+                target_canvas.yview_scroll(-1 if event.num == 4 else 1, "units")
+
+        widget.bind("<MouseWheel>", _on_mousewheel)
+        widget.bind("<Button-4>", _on_mousewheel)
+        widget.bind("<Button-5>", _on_mousewheel)
+
     def _refresh_texts(self) -> None:
         self.root.title(t("window_title", self.lang))
         self.title_label.configure(text=t("window_title", self.lang))
         self.language_label.configure(text=t("language_label", self.lang))
         self.language_combo.configure(values=available_langs())
-        self.help_button.configure(text=t("help_button", self.lang))
         for frame, label in [
             (self.game_frame, "game_group"),
             (self.play_frame, "play_agents_group"),
@@ -858,6 +1155,9 @@ class EinsteinTkApp:
         self._refresh_ui_state()
 
     def _on_new_game(self) -> None:
+        if hasattr(self, "default_agent_red"):
+            self.agent_var_red.set(self.default_agent_red.get())
+            self.agent_var_blue.set(self.default_agent_blue.get())
         try:
             self.controller = self._build_controller()
         except Exception as exc:
@@ -1478,11 +1778,12 @@ def main() -> None:
         sys.exit(0)
 
     app = EinsteinTkApp(lang=args.lang)
+    app.show_screen("play")
     if args.self_check:
         app._request_board_resize(delay=0)
         stabilized_width = 0
         stabilized_height = 0
-        for _ in range(150):
+        for _ in range(200):
             app.root.update_idletasks()
             app.root.update()
             try:
@@ -1508,6 +1809,20 @@ def main() -> None:
         errors.extend(app._run_ui_contract_check(stabilized_size=(stabilized_width, stabilized_height)))
         if errors:
             print("UI_SELF_CHECK_FAIL")
+            try:
+                print(
+                    "DEBUG board_frame: ismapped=%s size=%sx%s req=%sx%s root_state=%s"
+                    % (
+                        app.board_frame.winfo_ismapped(),
+                        app.board_frame.winfo_width(),
+                        app.board_frame.winfo_height(),
+                        app.board_frame.winfo_reqwidth(),
+                        app.board_frame.winfo_reqheight(),
+                        app.root.state(),
+                    )
+                )
+            except Exception:
+                pass
             for err in errors:
                 print(err)
             app.root.destroy()
