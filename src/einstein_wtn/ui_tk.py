@@ -64,8 +64,7 @@ class EinsteinTkApp:
         self.root = tk.Tk()
         font_family, has_cjk_font, base_size = self._configure_fonts()
         self.root.title(t("window_title", self.lang))
-        self.root.geometry("1200x820")
-        self.root.minsize(1100, 760)
+        self._apply_initial_geometry()
         self.has_cjk_font = has_cjk_font
         piece_font = (font_family, base_size + 5, "bold")
 
@@ -203,12 +202,33 @@ class EinsteinTkApp:
             self.board_buttons.append(row_buttons)
 
     def _build_control_panel(self, parent: ttk.Frame, piece_font) -> None:
-        control_frame = ttk.Frame(parent, padding=(0, 0, 0, 0))
+        control_container = ttk.Frame(parent, padding=(0, 0, 0, 0))
+        control_container.grid(row=0, column=1, sticky="nsew", padx=12, pady=8)
+        control_container.columnconfigure(0, weight=1, minsize=420)
+        control_container.rowconfigure(0, weight=1)
+
+        control_canvas = tk.Canvas(control_container, highlightthickness=0)
+        control_canvas.grid(row=0, column=0, sticky="nsew")
+        control_scroll = ttk.Scrollbar(control_container, orient="vertical", command=control_canvas.yview)
+        control_scroll.grid(row=0, column=1, sticky="ns")
+        control_canvas.configure(yscrollcommand=control_scroll.set)
+
+        control_frame = ttk.Frame(control_canvas, padding=(0, 0, 0, 0))
         self.control_frame = control_frame
-        control_frame.grid(row=0, column=1, sticky="ns", padx=12, pady=8)
         control_frame.columnconfigure(0, weight=1, minsize=420)
-        control_frame.grid_propagate(False)
-        control_frame.configure(width=420)
+        window_id = control_canvas.create_window((0, 0), window=control_frame, anchor="nw")
+
+        def _sync_scrollregion(event=None) -> None:
+            control_canvas.configure(scrollregion=control_canvas.bbox("all"))
+            try:
+                control_canvas.itemconfigure(window_id, width=control_canvas.winfo_width())
+            except Exception:
+                pass
+
+        control_frame.bind("<Configure>", _sync_scrollregion)
+        control_canvas.bind("<Configure>", _sync_scrollregion)
+        self._bind_mousewheel(control_canvas, control_canvas)
+        self._bind_mousewheel(control_frame, control_canvas)
 
         play_frame = ttk.LabelFrame(control_frame, text=t("play_agents_group", self.lang), padding=10)
         self.play_frame = play_frame
@@ -652,6 +672,8 @@ class EinsteinTkApp:
         for text, dims in [("1150x800", (1150, 800)), ("1300x900", (1300, 900)), ("1400x950", (1400, 950))]:
             btn = ttk.Button(size_buttons, text=text, command=lambda d=dims: self._apply_window_preset(*d))
             btn.pack(side=tk.LEFT, padx=4)
+        maximize_btn = ttk.Button(size_buttons, text="Maximize", command=self._maximize_window)
+        maximize_btn.pack(side=tk.LEFT, padx=4)
 
         auto_apply = ttk.Checkbutton(grid, text="Auto-apply advice", variable=self.auto_apply_var)
         auto_apply.grid(row=1, column=0, columnspan=2, sticky="w", pady=6)
@@ -854,9 +876,54 @@ class EinsteinTkApp:
         self.root.geometry(f"{width}x{height}+{offset_x}+{offset_y}")
 
     def _apply_window_preset(self, width: int, height: int) -> None:
-        self.root.geometry(f"{width}x{height}")
-        self.root.minsize(1100, 760)
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        clamped_w = min(width, max(900, screen_w - 40))
+        clamped_h = min(height, max(700, screen_h - 80))
+        self.root.geometry(f"{clamped_w}x{clamped_h}")
+        min_w = min(clamped_w, max(900, screen_w - 80))
+        min_h = min(clamped_h, max(700, screen_h - 120))
+        self.root.minsize(min_w, min_h)
         self._center_window()
+
+    def _apply_initial_geometry(self) -> None:
+        presets = [(1300, 900), (1250, 860), (1200, 820), (1150, 800), (1100, 760)]
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        usable_w = max(960, screen_w - 80)
+        usable_h = max(720, screen_h - 120)
+        selected_w, selected_h = presets[-1]
+        for w, h in presets:
+            if w <= usable_w and h <= usable_h:
+                selected_w, selected_h = w, h
+                break
+        selected_w = min(selected_w, usable_w)
+        selected_h = min(selected_h, usable_h)
+        self.root.geometry(f"{selected_w}x{selected_h}")
+        self.root.minsize(min(selected_w, usable_w), min(selected_h, usable_h))
+
+    def _maximize_window(self) -> None:
+        try:
+            self.root.state("zoomed")
+        except Exception:
+            try:
+                self.root.attributes("-zoomed", True)
+            except Exception:
+                screen_w = self.root.winfo_screenwidth()
+                screen_h = self.root.winfo_screenheight()
+                self.root.geometry(f"{screen_w}x{screen_h}+0+0")
+                self.root.update_idletasks()
+
+    def _bind_mousewheel(self, widget: tk.Misc, target_canvas: tk.Canvas) -> None:
+        def _on_mousewheel(event):
+            if event.delta:
+                target_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            elif getattr(event, "num", None) in (4, 5):
+                target_canvas.yview_scroll(-1 if event.num == 4 else 1, "units")
+
+        widget.bind("<MouseWheel>", _on_mousewheel)
+        widget.bind("<Button-4>", _on_mousewheel)
+        widget.bind("<Button-5>", _on_mousewheel)
 
     def _refresh_texts(self) -> None:
         self.root.title(t("window_title", self.lang))
