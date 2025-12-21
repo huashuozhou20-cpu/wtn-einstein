@@ -176,22 +176,12 @@ class EinsteinTkApp:
         raise ValueError(f"Unknown agent '{name}'")
 
     def _build_board_area(self, parent: ttk.Frame, piece_font) -> None:
-        board_outer = ttk.Frame(parent)
-        board_outer.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
-        board_outer.columnconfigure(0, weight=1)
-        board_outer.rowconfigure(0, weight=1)
-
-        self.board_container = ttk.Frame(board_outer)
-        self.board_container.grid(row=0, column=0, sticky="nsew")
-        self.board_container.columnconfigure(0, weight=1)
-        self.board_container.rowconfigure(0, weight=1)
-        self._resize_after: Optional[str] = None
-        self.board_container.bind("<Configure>", self._on_board_area_resize)
-
-        board_frame = ttk.Frame(self.board_container, padding=6, borderwidth=1, relief=tk.SOLID)
+        board_frame = ttk.Frame(parent, padding=6, borderwidth=1, relief=tk.SOLID)
         self.board_frame = board_frame
-        board_frame.place(relx=0.5, rely=0.5, anchor="center")
+        board_frame.grid(row=0, column=0, sticky="nsew", padx=12, pady=8)
         board_frame.grid_propagate(False)
+        board_frame.configure(width=600, height=600)
+        self._resize_after: Optional[str] = None
         board_frame.bind("<Configure>", self._on_board_area_resize)
         for idx in range(engine.BOARD_SIZE):
             board_frame.columnconfigure(idx, weight=1, uniform="board")
@@ -404,17 +394,12 @@ class EinsteinTkApp:
 
     def _layout_widgets(self, piece_font) -> None:
         self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        self.root.rowconfigure(1, weight=0)
-        self.root.rowconfigure(2, weight=1)
+        self.root.rowconfigure(0, weight=0)
+        self.root.rowconfigure(1, weight=1)
+        self.root.rowconfigure(2, weight=0)
+        self.root.rowconfigure(3, weight=1)
 
-        content_frame = ttk.Frame(self.root)
-        content_frame.grid(row=0, column=0, sticky="nsew")
-        content_frame.columnconfigure(0, weight=1)
-        content_frame.rowconfigure(0, weight=0)
-        content_frame.rowconfigure(1, weight=1)
-
-        header_frame = ttk.Frame(content_frame, padding=(12, 12, 12, 6))
+        header_frame = ttk.Frame(self.root, padding=(12, 12, 12, 6))
         header_frame.grid(row=0, column=0, sticky="ew")
         header_frame.columnconfigure(1, weight=1)
         self.title_label = ttk.Label(header_frame, text=t("window_title", self.lang), font=("TkDefaultFont", 14, "bold"))
@@ -438,17 +423,17 @@ class EinsteinTkApp:
         self.header_status_label = ttk.Label(header_frame, textvariable=self.status_var)
         self.header_status_label.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(6, 0))
 
-        main_frame = ttk.Frame(content_frame, padding=(12, 6, 12, 6))
+        main_frame = ttk.Frame(self.root, padding=(12, 6, 12, 6))
         main_frame.grid(row=1, column=0, sticky="nsew")
+        main_frame.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=0, minsize=420)
-        main_frame.rowconfigure(0, weight=1)
 
         self._build_board_area(main_frame, piece_font)
         self._build_control_panel(main_frame, piece_font)
 
         status_frame = ttk.Frame(self.root, padding=(12, 0, 12, 6))
-        status_frame.grid(row=1, column=0, sticky="ew")
+        status_frame.grid(row=2, column=0, sticky="ew")
         status_frame.columnconfigure(3, weight=1)
         status_frame.columnconfigure(9, weight=1)
         self.phase_heading = ttk.Label(status_frame, text=t("phase_label", self.lang), font=("TkDefaultFont", 11, "bold"))
@@ -487,7 +472,7 @@ class EinsteinTkApp:
 
         log_frame = ttk.LabelFrame(self.root, text=t("move_log", self.lang), padding=8)
         self.log_frame = log_frame
-        log_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 12))
+        log_frame.grid(row=3, column=0, sticky="nsew", padx=12, pady=(0, 12))
         log_frame.columnconfigure(0, weight=1)
         log_frame.rowconfigure(0, weight=1)
         log_text_frame = ttk.Frame(log_frame)
@@ -556,10 +541,21 @@ class EinsteinTkApp:
             except Exception:
                 width = height = 0
 
+        try:
+            req_width = self.board_frame.winfo_reqwidth()
+            req_height = self.board_frame.winfo_reqheight()
+        except Exception:
+            req_width = req_height = 0
+
         if width is None or height is None:
             errors.append("board_frame size unavailable")
-        elif width < 300 or height < 300:
-            errors.append(f"board_frame too small ({width}x{height})")
+        else:
+            actual_small = width < 300 or height < 300
+            req_small = req_width < 300 or req_height < 300
+            if actual_small and req_small:
+                errors.append(
+                    f"board_frame too small ({width}x{height}), req=({req_width}x{req_height})"
+                )
 
         return errors
 
@@ -588,12 +584,10 @@ class EinsteinTkApp:
             self.root.after_cancel(self._resize_after)
 
         def redraw() -> None:
-            container_w = self.board_container.winfo_width()
-            container_h = self.board_container.winfo_height()
             frame_w = self.board_frame.winfo_width()
             frame_h = self.board_frame.winfo_height()
-            current_width = width if width is not None else max(container_w, frame_w)
-            current_height = height if height is not None else max(container_h, frame_h)
+            current_width = width if width is not None else frame_w
+            current_height = height if height is not None else frame_h
             if current_width < 120 or current_height < 120:
                 self._request_board_resize(delay=100)
                 return
@@ -615,7 +609,7 @@ class EinsteinTkApp:
         else:
             cell = max(24, raw_cell)
         board_size = cell * engine.BOARD_SIZE
-        self.board_frame.place_configure(width=board_size, height=board_size)
+        self.board_frame.configure(width=board_size, height=board_size)
         self.board_frame.update_idletasks()
 
     def _center_window(self) -> None:
@@ -1482,7 +1476,7 @@ def main() -> None:
         app._request_board_resize(delay=0)
         stabilized_width = 0
         stabilized_height = 0
-        for _ in range(150):
+        for _ in range(200):
             app.root.update_idletasks()
             app.root.update()
             try:
@@ -1508,6 +1502,20 @@ def main() -> None:
         errors.extend(app._run_ui_contract_check(stabilized_size=(stabilized_width, stabilized_height)))
         if errors:
             print("UI_SELF_CHECK_FAIL")
+            try:
+                print(
+                    "DEBUG board_frame: ismapped=%s size=%sx%s req=%sx%s root_state=%s"
+                    % (
+                        app.board_frame.winfo_ismapped(),
+                        app.board_frame.winfo_width(),
+                        app.board_frame.winfo_height(),
+                        app.board_frame.winfo_reqwidth(),
+                        app.board_frame.winfo_reqheight(),
+                        app.root.state(),
+                    )
+                )
+            except Exception:
+                pass
             for err in errors:
                 print(err)
             app.root.destroy()
