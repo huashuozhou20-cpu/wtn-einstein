@@ -15,15 +15,6 @@ A minimal, testable implementation of the WTN Einstein board game with simple ag
 - Red moves one step right, down, or down-right. Blue moves one step left, up, or up-left. Landing on any piece captures it (friendly fire allowed).
 - Win: Red reaches `(4,4)` or captures all blue pieces; Blue reaches `(0,0)` or captures all red pieces. Draws do not occur.
 
-## Download & Run
-- Download the latest `gomoku.exe` from the [GitHub Releases](/releases) page and run it locally.
-
-## Build from Source
-```bash
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release
-```
-
 ## Development
 Install dependencies and run tests:
 
