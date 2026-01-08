@@ -29,11 +29,14 @@ Run a sample game:
 ```bash
 python -m einstein_wtn.runner --mode game --red heuristic --blue random --seed 42
 ```
-直接跑：
+
+直接跑:
+
 ```bash
 source .venv/bin/activate
 python -m einstein_wtn.ui_tk
 ```
+
 Use the expectiminimax agent and specify layouts explicitly (comma-separated permutations of 1..6) if desired:
 
 ```bash
